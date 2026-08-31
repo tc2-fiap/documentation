@@ -16,10 +16,25 @@ For what you're looking at architecturally, see [`DOCUMENTATION.en-US.md`](DOCUM
 
 Only needed if you also want to run a single service standalone instead of the whole cluster: **.NET 10 SDK**, **Node 22+**, **Docker Compose** (see that repo's own `README.md`).
 
-## 1. Create the cluster
+## 1. Clone the repos
+
+This project is split across eight independent GitHub repos under [`github.com/tc2-fiap`](https://github.com/tc2-fiap) — see [`../README.en-US.md`](../README.en-US.md) for the full picture and what each one owns. Running the system itself only needs seven: the five backend services, `frontend`, and `orchestration` (`documentation` — this repo — and the separate `base-project` reference monolith aren't part of the running system).
+
+`orchestration`'s Helm chart expects the other six as **sibling directories** on disk — its `Chart.yaml` dependencies are literal relative paths (`file://../users-api/k8s`, and so on for each service), not a registry lookup. Clone all seven into one empty parent directory, keeping the default folder names `git clone` gives you:
 
 ```bash
-kind create cluster --config repos/orchestration/kind/cluster-config.yaml
+mkdir fiap-games && cd fiap-games
+for repo in users-api catalog-api orders-api payments-api notifications-api frontend orchestration; do
+  git clone https://github.com/tc2-fiap/$repo.git
+done
+```
+
+Every command from here on runs from this parent directory (the one now containing all seven as siblings), unless a step says otherwise.
+
+## 2. Create the cluster
+
+```bash
+kind create cluster --config orchestration/kind/cluster-config.yaml
 ```
 
 This creates a one-node cluster named `fiap-games` with host ports 80/443 mapped in and the `ingress-ready` node label set, so an ingress controller can bind those ports directly — no `kubectl port-forward` needed for anything reached through the Ingress.
@@ -34,10 +49,10 @@ kubectl wait --namespace ingress-nginx \
   --timeout=120s
 ```
 
-## 2. Install the system
+## 3. Install the system
 
 ```bash
-cd repos/orchestration
+cd orchestration
 helm dependency update
 helm install fiap-games .
 ```
@@ -46,7 +61,7 @@ helm install fiap-games .
 
 This brings up 8 pods: Postgres, RabbitMQ, and the five backend services plus the frontend, all in the `fiap-games` namespace, all wired to one Ingress at `http://localhost`.
 
-## 3. Verify
+## 4. Verify
 
 ```bash
 kubectl get pods -n fiap-games
@@ -68,7 +83,7 @@ kubectl exec -n fiap-games deploy/postgres -- \
 
 (Role password is `orders-dev-password` per `values.yaml`; `psql` inside the pod uses the local socket, so no password prompt.)
 
-## 4. Demo walkthrough
+## 5. Demo walkthrough
 
 Everything below goes through the one Ingress base URL — no port-forwarding, no per-service hostnames.
 
@@ -175,7 +190,7 @@ Register or log in (a Google sign-in button appears automatically only if `Googl
 
 The header carries an EN/PT toggle, visible even before logging in. Toggling to Portuguese always shows native BRL (e.g. `R$ 29,99`); toggling to English converts every catalog price to its USD equivalent using the live quotation, falling back to BRL if the rate lookup is ever unavailable — never a blank or broken price. The checkout page always shows both currencies together regardless of the toggle. The language choice itself persists across a reload (`notes.md` 35, 36, 39).
 
-## 5. Tear down
+## 6. Tear down
 
 ```bash
 helm uninstall fiap-games
@@ -192,7 +207,8 @@ Every backend repo and the frontend also run alone via their own `docker-compose
 | Symptom | Likely cause |
 |---|---|
 | A pod restarts once at install | Almost always Postgres/RabbitMQ readiness — check `kubectl logs` for that pod's previous instance (`kubectl logs -p`) before assuming it's a real bug; the `wait-for-postgres` init container should prevent this for Postgres, but RabbitMQ has no equivalent guard (MassTransit retries its own connection) |
-| `helm install` complains about a missing chart archive | Run `helm dependency update` in `repos/orchestration/` first — the umbrella chart's dependencies are local `file://` paths that need resolving into `charts/*.tgz` |
+| `helm install` complains about a missing chart archive | Run `helm dependency update` in `orchestration/` first — the umbrella chart's dependencies are local `file://` paths that need resolving into `charts/*.tgz` |
+| `helm dependency update` can't resolve a dependency (`../users-api/k8s` not found, etc.) | The six sibling repos need to be cloned next to `orchestration/`, with their default folder names — see [step 1](#1-clone-the-repos) |
 | `curl $BASE/...` connection refused | The ingress controller isn't ready yet, or the kind cluster wasn't created with the port mappings in `kind/cluster-config.yaml` |
 | Google button never appears | Expected with no `Google:ClientId` configured — `GET /api/users/config` reports `googleSignInEnabled: false` and the frontend hides it deliberately, rather than showing a button guaranteed to fail |
 | No email arrives despite `EMAIL_PROVIDER=resend` | Check `notifications-api` logs and the `resend-credentials` Secret — a missing/invalid `RESEND_API_KEY` fails the send and is recorded on the `Notification` row itself (visible via the admin notifications endpoint), not silently swallowed |

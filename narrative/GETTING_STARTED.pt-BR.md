@@ -16,10 +16,25 @@ Para entender a arquitetura, veja [`DOCUMENTATION.pt-BR.md`](DOCUMENTATION.pt-BR
 
 Necessário apenas se você também quiser rodar um único serviço de forma independente, sem o cluster inteiro: **.NET 10 SDK**, **Node 22+**, **Docker Compose** (veja o próprio `README.md` daquele repositório).
 
-## 1. Criar o cluster
+## 1. Clonar os repositórios
+
+Este projeto está dividido em oito repositórios independentes no GitHub, sob [`github.com/tc2-fiap`](https://github.com/tc2-fiap) — veja [`../README.pt-BR.md`](../README.pt-BR.md) para a visão completa e o que cada um possui. Para rodar o sistema em si, só sete são necessários: os cinco serviços de backend, o `frontend` e o `orchestration` (`documentation` — este repositório — e o `base-project`, o monólito de referência à parte, não fazem parte do sistema em execução).
+
+O chart Helm do `orchestration` espera que os outros seis estejam como **diretórios irmãos** no disco — as dependências do seu `Chart.yaml` são caminhos relativos literais (`file://../users-api/k8s`, e assim por diante para cada serviço), não uma busca em um registro. Clone os sete em um diretório pai vazio, mantendo os nomes de pasta padrão que o `git clone` já usa:
 
 ```bash
-kind create cluster --config repos/orchestration/kind/cluster-config.yaml
+mkdir fiap-games && cd fiap-games
+for repo in users-api catalog-api orders-api payments-api notifications-api frontend orchestration; do
+  git clone https://github.com/tc2-fiap/$repo.git
+done
+```
+
+Todo comando a partir daqui roda a partir desse diretório pai (o que agora contém os sete como irmãos), a menos que um passo diga o contrário.
+
+## 2. Criar o cluster
+
+```bash
+kind create cluster --config orchestration/kind/cluster-config.yaml
 ```
 
 Isso cria um cluster de um nó chamado `fiap-games`, com as portas 80/443 do host mapeadas e o label de nó `ingress-ready` definido, para que um controlador de ingress possa se ligar diretamente a essas portas — sem necessidade de `kubectl port-forward` para nada acessado pelo Ingress.
@@ -34,10 +49,10 @@ kubectl wait --namespace ingress-nginx \
   --timeout=120s
 ```
 
-## 2. Instalar o sistema
+## 3. Instalar o sistema
 
 ```bash
-cd repos/orchestration
+cd orchestration
 helm dependency update
 helm install fiap-games .
 ```
@@ -46,7 +61,7 @@ helm install fiap-games .
 
 Isso sobe 8 pods: Postgres, RabbitMQ, os cinco serviços de backend e o frontend, todos no namespace `fiap-games`, todos conectados a um único Ingress em `http://localhost`.
 
-## 3. Verificar
+## 4. Verificar
 
 ```bash
 kubectl get pods -n fiap-games
@@ -68,7 +83,7 @@ kubectl exec -n fiap-games deploy/postgres -- \
 
 (A senha do role é `orders-dev-password`, conforme `values.yaml`; o `psql` dentro do pod usa o socket local, então não pede senha.)
 
-## 4. Passo a passo de demonstração
+## 5. Passo a passo de demonstração
 
 Tudo abaixo passa pela única URL base do Ingress — sem port-forward, sem hostname por serviço.
 
@@ -175,7 +190,7 @@ Cadastre-se ou faça login (um botão de login com Google aparece automaticament
 
 O cabeçalho tem uma alternância EN/PT, visível mesmo antes de fazer login. Trocar para português sempre mostra o BRL nativo (ex.: `R$ 29,99`); trocar para inglês converte todo preço do catálogo para o equivalente em USD usando a cotação ao vivo, voltando para BRL se a cotação estiver indisponível — nunca um preço em branco ou quebrado. A página de checkout sempre mostra as duas moedas juntas, independente da alternância. A escolha de idioma em si persiste entre recarregamentos (`notes.md` 35, 36, 39).
 
-## 5. Encerrar o ambiente
+## 6. Encerrar o ambiente
 
 ```bash
 helm uninstall fiap-games
@@ -192,7 +207,8 @@ Todo repositório de backend e o frontend também rodam sozinhos via seu própri
 | Sintoma | Causa provável |
 |---|---|
 | Um pod reinicia uma vez na instalação | Quase sempre é a prontidão do Postgres/RabbitMQ — verifique `kubectl logs` da instância anterior daquele pod (`kubectl logs -p`) antes de supor que é um bug de verdade; o init container `wait-for-postgres` deveria prevenir isso para o Postgres, mas o RabbitMQ não tem uma proteção equivalente (o MassTransit tenta novamente a própria conexão) |
-| `helm install` reclama de um chart archive faltando | Rode `helm dependency update` em `repos/orchestration/` primeiro — as dependências do chart guarda-chuva são caminhos locais `file://` que precisam ser resolvidos em `charts/*.tgz` |
+| `helm install` reclama de um chart archive faltando | Rode `helm dependency update` em `orchestration/` primeiro — as dependências do chart guarda-chuva são caminhos locais `file://` que precisam ser resolvidos em `charts/*.tgz` |
+| `helm dependency update` não consegue resolver uma dependência (`../users-api/k8s` não encontrado, etc.) | Os seis repositórios irmãos precisam estar clonados ao lado de `orchestration/`, com seus nomes de pasta padrão — veja o [passo 1](#1-clonar-os-repositórios) |
 | `curl $BASE/...` dá connection refused | O controlador de ingress ainda não está pronto, ou o cluster kind não foi criado com os mapeamentos de porta em `kind/cluster-config.yaml` |
 | O botão do Google nunca aparece | Esperado quando não há `Google:ClientId` configurado — `GET /api/users/config` reporta `googleSignInEnabled: false` e o frontend o esconde deliberadamente, em vez de mostrar um botão fadado a falhar |
 | Nenhum e-mail chega apesar de `EMAIL_PROVIDER=resend` | Verifique os logs do `notifications-api` e o Secret `resend-credentials` — uma `RESEND_API_KEY` ausente/inválida faz o envio falhar, e isso fica registrado na própria linha de `Notification` (visível via o endpoint admin de notificações), não é silenciosamente engolido |
