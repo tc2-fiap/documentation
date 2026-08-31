@@ -47,7 +47,7 @@ Este repositório — `repos/documentation/` — reúne toda especificação, re
 | [`DOCUMENTATION.en-US.md`](narrative/DOCUMENTATION.en-US.md) / [`.pt-BR`](narrative/DOCUMENTATION.pt-BR.md) | O que foi efetivamente construído — arquitetura, diagramas de fluxo de eventos, detalhamento por serviço | Inglês, Português |
 | [`GETTING_STARTED.en-US.md`](narrative/GETTING_STARTED.en-US.md) / [`.pt-BR`](narrative/GETTING_STARTED.pt-BR.md) | Pré-requisitos, subida do cluster, verificação, passo a passo de demonstração | Inglês, Português |
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Contexto de trabalho para sessões de agente de IA | Somente inglês |
-| [`../frontend/design/`](../frontend/design/) | Identidade visual — tokens de cor, marca, logomarca, favicon — aplicados literalmente no frontend, mantidos no único repositório que os usa (`notes.md` 44) | Somente inglês |
+| [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Identidade visual — tokens de cor, marca, logomarca, favicon — aplicados literalmente no frontend, mantidos no único repositório que os usa (`notes.md` 44) | Somente inglês |
 
 `instructions.md` é *o quê*. `notes.md` é *o porquê*. `bdd.md` é *como você saberia que funciona*. `DOCUMENTATION.md` é *o que de fato foi construído*. `instructions.md`/`notes.md`/`bdd.md` permanecem em um único idioma — são uma especificação e um log de engenharia somente-acréscimo escritos durante a construção, não documentação narrativa voltada ao leitor (`notes.md` 35).
 

@@ -14,9 +14,9 @@ O foco aqui é o mesmo do [`base-project/docs/DOCUMENTATION.md`](https://github.
 |---|---|
 | [`GETTING_STARTED.pt-BR.md`](GETTING_STARTED.pt-BR.md) | Pré-requisitos, subida do cluster, verificação, um passo a passo de demonstração |
 | [`instructions.md`](../spec/instructions.md) | A especificação — arquitetura, responsabilidades de cada serviço, contratos de eventos, critérios de aceitação (em inglês) |
-| [`notes.md`](../spec/notes.md) | Registro de decisões — 49 entradas, cada uma com a alternativa rejeitada e o que a reabriria (em inglês) |
+| [`notes.md`](../spec/notes.md) | Registro de decisões — 50 entradas, cada uma com a alternativa rejeitada e o que a reabriria (em inglês) |
 | [`bdd.md`](../spec/bdd.md) | Cenários de aceitação em Gherkin — a camada de aceitação do projeto (em inglês) |
-| [`../../frontend/design/`](../../frontend/design/) | Identidade visual — tokens de cor, marca, logomarca, favicon (aplicados literalmente no frontend) |
+| [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Identidade visual — tokens de cor, marca, logomarca, favicon (aplicados literalmente no frontend) |
 | [`base-project/docs/DOCUMENTATION.md`](https://github.com/KainanGuerra/fiap-games/blob/main/docs/DOCUMENTATION.md) | Como o monólito de referência que este sistema substitui foi construído |
 
 ## 2. Por que um sistema distribuído, e como foi construído
@@ -28,18 +28,18 @@ Essa é uma superfície de falha materialmente maior que a de um monólito: cinc
 ## 3. Arquitetura da solução
 
 ```
-repos/
-  documentation/        # README (raiz) + narrative/ (este documento, GETTING_STARTED.md) + spec/ (instructions.md, notes.md, bdd.md) + features/
-  users-api/           # cadastro, login, login com Google, emissão de JWT, papéis
-  catalog-api/          # o catálogo de jogos — apenas dado de referência de produto
-  orders-api/           # o agregado Order, o ciclo de vida da compra, a biblioteca, o log de auditoria
-  payments-api/         # abstração do gateway de pagamento, registros de pagamento persistidos
-  notifications-api/    # e-mails de boas-vindas, confirmações de compra (console ou Resend)
-  frontend/             # React + Vite — o único serviço acessado diretamente pelo navegador; também guarda o design/, os ativos de marca
-  orchestration/        # Postgres, RabbitMQ, Ingress, chart Helm guarda-chuva
+users-api/            # cadastro, login, login com Google, emissão de JWT, papéis
+catalog-api/          # o catálogo de jogos — apenas dado de referência de produto
+orders-api/           # o agregado Order, o ciclo de vida da compra, a biblioteca, o log de auditoria
+payments-api/         # abstração do gateway de pagamento, registros de pagamento persistidos
+notifications-api/    # e-mails de boas-vindas, confirmações de compra (console ou Resend)
+frontend/             # React + Vite — o único serviço acessado diretamente pelo navegador; também guarda o design/, os ativos de marca
+orchestration/        # Postgres, RabbitMQ, Ingress, chart Helm guarda-chuva
 ```
 
-Todo repositório sob `repos/` — os cinco serviços de backend, o `frontend`, o `orchestration` e o `documentation` — tem seu próprio `README.md` (`notes.md` 34, 44). Cada repositório de backend segue a mesma camada interna usada pelos módulos do `base-project` — `Domain` → `Application` → `Infrastructure`, com `Endpoints` na camada mais externa, dependências apontando para dentro — mas como a estrutura do repositório *inteiro*, não um módulo dentro de um host compartilhado. Código de kernel livre de framework (`Result`, `Entity`, `IRepository`, paginação) e infraestrutura de JWT/tratamento de erros são **duplicados por serviço**, não empacotados (`notes.md` 21) — cinco cópias de ~13 arquivos pequenos, escolha feita em vez de um pacote NuGet compartilhado especificamente para evitar reintroduzir o acoplamento que a separação pretendia eliminar.
+Sete repositórios independentes sob [`github.com/tc2-fiap`](https://github.com/tc2-fiap), clonados como irmãos, lado a lado — veja `GETTING_STARTED.md` §1. O `documentation` (este repositório) é publicado separadamente (também em `github.com/tc2-fiap/documentation`) e não faz parte desse layout local — é material de referência, não algo que o sistema em execução ou sua build precisem em disco (`notes.md` 47, 49).
+
+Cada um desses oito repositórios tem seu próprio `README.md` (`notes.md` 34, 44). Cada repositório de backend segue a mesma camada interna usada pelos módulos do `base-project` — `Domain` → `Application` → `Infrastructure`, com `Endpoints` na camada mais externa, dependências apontando para dentro — mas como a estrutura do repositório *inteiro*, não um módulo dentro de um host compartilhado. Código de kernel livre de framework (`Result`, `Entity`, `IRepository`, paginação) e infraestrutura de JWT/tratamento de erros são **duplicados por serviço**, não empacotados (`notes.md` 21) — cinco cópias de ~13 arquivos pequenos, escolha feita em vez de um pacote NuGet compartilhado especificamente para evitar reintroduzir o acoplamento que a separação pretendia eliminar.
 
 ```mermaid
 flowchart LR
@@ -225,7 +225,7 @@ Só o `users-api` precisou de uma tabela nova (`UserEvent`) — era o único ser
 
 ## 11. CI/CD
 
-Cada um dos seis repositórios carrega seu próprio `.github/workflows/ci.yml`, adaptado do formato de dois jobs do [`base-project/.github/workflows/ci-cd.yml`](https://github.com/KainanGuerra/fiap-games/blob/main/.github/workflows/ci-cd.yml): `build-and-test` (restore/build/test para os repositórios .NET, install/lint/build para o frontend) roda em todo push e PR; `docker-build-and-push` roda apenas em push para `main`, depois que o primeiro job passa, publicando no GHCR. Nenhum deles rodou durante a construção em si — a raiz deste workspace nunca foi inicializada com `git init` durante essa fase, deliberadamente. Desde então, todos os seis repositórios (mais o `orchestration`) foram publicados individualmente no GitHub sob uma organização dedicada (`notes.md` 47) — mas os workflows ainda não rodaram, porque o branch padrão de cada repositório publicado saiu como `master` (padrão local do `git init`, nunca renomeado), enquanto o gatilho acima está restrito ao `main`.
+Cada um dos seis repositórios carrega seu próprio `.github/workflows/ci.yml`, adaptado do formato de dois jobs do [`base-project/.github/workflows/ci-cd.yml`](https://github.com/KainanGuerra/fiap-games/blob/main/.github/workflows/ci-cd.yml): `build-and-test` (restore/build/test para os repositórios .NET, install/lint/build para o frontend) roda em todo push e PR; `docker-build-and-push` roda apenas em push para `main`, depois que o primeiro job passa, publicando no GHCR. Nenhum deles rodou durante a construção em si — a raiz deste workspace nunca foi inicializada com `git init` durante essa fase, deliberadamente. Desde então, todos os sete repositórios em execução foram publicados individualmente no GitHub sob uma organização dedicada, `tc2-fiap` (`notes.md` 47). Cada um veio inicialmente com o branch padrão `master` (padrão local do `git init`), enquanto esse gatilho é restrito ao `main` — então o CI nunca disparou silenciosamente em nenhum deles; o branch padrão de cada repositório foi renomeado para `main` logo depois, especificamente para corrigir isso (`notes.md` 48), e o CI agora roda a cada push. O `documentation` (este repositório) foi publicado mais tarde ainda, direto em `main`, mas não carrega workflow de CI próprio (`notes.md` 49).
 
 ## 12. Entregáveis
 
@@ -234,7 +234,7 @@ Cada um dos seis repositórios carrega seu próprio `.github/workflows/ci.yml`, 
 - Isolamento de schema do Postgres por serviço, garantido por concessões de role e verificado ao vivo por uma consulta entre schemas recusada.
 - Um papel de admin com trilha de auditoria entre serviços composta a partir de quatro endpoints independentes, e login com Google e envio real de e-mail opcionais, ambos degradando graciosamente para "desligado" quando não configurados.
 - Subida do cluster em um único comando (`helm install`) verificada com zero reinícios a partir de um estado genuinamente limpo.
-- Uma especificação escrita (`instructions.md`), um registro de decisões com 49 entradas (`notes.md`) e cenários de aceitação em Gherkin (`bdd.md`).
+- Uma especificação escrita (`instructions.md`), um registro de decisões com 50 entradas (`notes.md`) e cenários de aceitação em Gherkin (`bdd.md`).
 - Documentação narrativa bilíngue (inglês/português) — este documento, o `GETTING_STARTED.md` e o `README.md` de cada repositório — e uma alternância de idioma inglês/pt-BR no próprio frontend; todo preço continua sendo um `decimal` em BRL de ponta a ponta, exibido em R$ ou convertido para um valor em USD só de exibição, dependendo da alternância (`notes.md` 35, 36, 39).
 - Um passo de checkout real com resumo do produto, preço em duas moedas e um QR code/código copia-e-cola PIX quando um gateway real está ativo — além de uma trava contra compra duplicada, para que um jogo já possuído ou em andamento não possa ser comprado de novo (`notes.md` 40, 42).
 - Uma segunda visão de admin, `/admin/events`, listando e filtrando todo evento/mensagem entre os cinco serviços — não restrita a um pedido — composta a partir de quatro endpoints de admin "listar tudo", da mesma forma que a trilha de auditoria por pedido (`notes.md` 43).

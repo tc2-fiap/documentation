@@ -47,7 +47,7 @@ This repo — `repos/documentation/` — holds every spec, decision record, and 
 | [`DOCUMENTATION.en-US.md`](narrative/DOCUMENTATION.en-US.md) / [`.pt-BR`](narrative/DOCUMENTATION.pt-BR.md) | What was actually built — architecture, event-flow diagrams, per-service breakdown | English, Português |
 | [`GETTING_STARTED.en-US.md`](narrative/GETTING_STARTED.en-US.md) / [`.pt-BR`](narrative/GETTING_STARTED.pt-BR.md) | Prerequisites, cluster bring-up, verification, demo walkthrough | English, Português |
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Working context for AI agent sessions | English only |
-| [`../frontend/design/`](../frontend/design/) | Brand identity — color tokens, wordmark, logo mark, favicon — applied verbatim in the frontend, kept in the one repo that uses it (`notes.md` 44) | English only |
+| [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Brand identity — color tokens, wordmark, logo mark, favicon — applied verbatim in the frontend, kept in the one repo that uses it (`notes.md` 44) | English only |
 
 `instructions.md` is the *what*. `notes.md` is the *why*. `bdd.md` is *how you'd know it works*. `DOCUMENTATION.md` is *what actually got built*. `instructions.md`/`notes.md`/`bdd.md` stay single-language — they're a spec and an append-only decision log written during the build, not reader-facing narrative documentation (`notes.md` 35).
 

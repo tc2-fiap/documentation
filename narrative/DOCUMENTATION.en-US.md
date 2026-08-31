@@ -14,9 +14,9 @@ The focus here is the same as [`base-project/docs/DOCUMENTATION.md`](https://git
 |---|---|
 | [`GETTING_STARTED.en-US.md`](GETTING_STARTED.en-US.md) | Prerequisites, cluster bring-up, verification, a demo walkthrough |
 | [`instructions.md`](../spec/instructions.md) | The spec — architecture, service responsibilities, event contracts, acceptance criteria |
-| [`notes.md`](../spec/notes.md) | Decision record — 49 entries, each with the rejected alternative and what would reopen it |
+| [`notes.md`](../spec/notes.md) | Decision record — 50 entries, each with the rejected alternative and what would reopen it |
 | [`bdd.md`](../spec/bdd.md) | Gherkin acceptance scenarios — the project's acceptance layer |
-| [`../../frontend/design/`](../../frontend/design/) | Brand identity — color tokens, wordmark, logo mark, favicon (applied verbatim in the frontend) |
+| [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Brand identity — color tokens, wordmark, logo mark, favicon (applied verbatim in the frontend) |
 | [`base-project/docs/DOCUMENTATION.md`](https://github.com/KainanGuerra/fiap-games/blob/main/docs/DOCUMENTATION.md) | How the reference monolith this system replaces is built |
 
 ## 2. Why a distributed system, and how it was built
@@ -28,18 +28,18 @@ That's a materially larger failure surface than a monolith: five services, a mes
 ## 3. Solution architecture
 
 ```
-repos/
-  documentation/        # README (root) + narrative/ (this document, GETTING_STARTED.md) + spec/ (instructions.md, notes.md, bdd.md) + features/
-  users-api/           # registration, login, Google sign-in, JWT issuance, roles
-  catalog-api/          # game catalog — product reference data only
-  orders-api/           # the Order aggregate, purchase lifecycle, library, audit log
-  payments-api/         # payment gateway abstraction, persisted payment records
-  notifications-api/    # welcome emails, purchase confirmations (console or Resend)
-  frontend/             # React + Vite — the only service reached by a browser directly; also owns design/, the brand assets
-  orchestration/        # Postgres, RabbitMQ, Ingress, umbrella Helm chart
+users-api/            # registration, login, Google sign-in, JWT issuance, roles
+catalog-api/          # game catalog — product reference data only
+orders-api/           # the Order aggregate, purchase lifecycle, library, audit log
+payments-api/         # payment gateway abstraction, persisted payment records
+notifications-api/    # welcome emails, purchase confirmations (console or Resend)
+frontend/             # React + Vite — the only service reached by a browser directly; also owns design/, the brand assets
+orchestration/        # Postgres, RabbitMQ, Ingress, umbrella Helm chart
 ```
 
-Every repo under `repos/` — the five backend services, `frontend`, `orchestration`, and `documentation` — has its own `README.md` (`notes.md` 34, 44). Each backend repo follows the same internal layering `base-project`'s modules used — `Domain` → `Application` → `Infrastructure`, with `Endpoints` outermost, dependencies pointing inward — but as the *entire* repo's structure, not a module within a shared host. Framework-free kernel code (`Result`, `Entity`, `IRepository`, pagination) and JWT/error-handling infrastructure are **duplicated per service**, not packaged (`notes.md` 21) — five copies of ~13 small files, chosen over a shared NuGet package specifically to avoid reintroducing the coupling the split was meant to remove.
+Seven independent repos under [`github.com/tc2-fiap`](https://github.com/tc2-fiap), cloned as flat siblings — see `GETTING_STARTED.md` §1. `documentation` (this repo) is published separately (also `github.com/tc2-fiap/documentation`) and isn't part of that local layout — it's reference material, not something the running system or its build needs on disk (`notes.md` 47, 49).
+
+Every one of these eight repos has its own `README.md` (`notes.md` 34, 44). Each backend repo follows the same internal layering `base-project`'s modules used — `Domain` → `Application` → `Infrastructure`, with `Endpoints` outermost, dependencies pointing inward — but as the *entire* repo's structure, not a module within a shared host. Framework-free kernel code (`Result`, `Entity`, `IRepository`, pagination) and JWT/error-handling infrastructure are **duplicated per service**, not packaged (`notes.md` 21) — five copies of ~13 small files, chosen over a shared NuGet package specifically to avoid reintroducing the coupling the split was meant to remove.
 
 ```mermaid
 flowchart LR
@@ -225,7 +225,7 @@ Only `users-api` needed a new table (`UserEvent`) — it was the one service wit
 
 ## 11. CI/CD
 
-Each of the six repos carries its own `.github/workflows/ci.yml`, adapted from [`base-project/.github/workflows/ci-cd.yml`](https://github.com/KainanGuerra/fiap-games/blob/main/.github/workflows/ci-cd.yml)'s two-job shape: `build-and-test` (restore/build/test for .NET repos, install/lint/build for the frontend) runs on every push and PR; `docker-build-and-push` runs only on a push to `main`, after the first job passes, publishing to GHCR. None of these executed during the build itself — this workspace's root was never `git init`'d for its duration, deliberately. Since then, all six of these repos (plus `orchestration`) were published individually to GitHub under a dedicated org (`notes.md` 47) — but their workflows still haven't run, because each published repo's default branch came out as `master` (`git init`'s local default, never renamed), while the trigger above is scoped to `main`.
+Each of the six repos carries its own `.github/workflows/ci.yml`, adapted from [`base-project/.github/workflows/ci-cd.yml`](https://github.com/KainanGuerra/fiap-games/blob/main/.github/workflows/ci-cd.yml)'s two-job shape: `build-and-test` (restore/build/test for .NET repos, install/lint/build for the frontend) runs on every push and PR; `docker-build-and-push` runs only on a push to `main`, after the first job passes, publishing to GHCR. None of these executed during the build itself — this workspace's root was never `git init`'d for its duration, deliberately. Since then, all seven runtime repos were published individually to GitHub under a dedicated org, `tc2-fiap` (`notes.md` 47). Each initially defaulted to a `master` branch (`git init`'s local default) while this trigger is scoped to `main`, so CI silently never fired on any of them — every repo's default branch was renamed to `main` shortly after specifically to fix that (`notes.md` 48), and CI now runs on every push. `documentation` (this repo) was published later still, directly on `main`, but carries no CI workflow of its own (`notes.md` 49).
 
 ## 12. Deliverables
 
@@ -234,7 +234,7 @@ Each of the six repos carries its own `.github/workflows/ci.yml`, adapted from [
 - Per-service Postgres schema isolation, enforced by role grants and verified live by a refused cross-schema query.
 - An admin role with a cross-service audit trail composed from four independent endpoints, and optional Google sign-in and real email delivery, both gracefully degrading to "off" when unconfigured.
 - A single-command cluster bring-up (`helm install`) verified with zero restarts from a genuinely clean state.
-- A written specification (`instructions.md`), a 49-entry decision record (`notes.md`), and Gherkin acceptance scenarios (`bdd.md`).
+- A written specification (`instructions.md`), a 50-entry decision record (`notes.md`), and Gherkin acceptance scenarios (`bdd.md`).
 - Bilingual (English/Portuguese) narrative documentation — this document, `GETTING_STARTED.md`, and every repo's `README.md` — and an English/pt-BR language toggle in the frontend itself; every price is still a BRL `decimal` end-to-end, shown as R$ or converted to a display-only USD figure depending on the toggle (`notes.md` 35, 36, 39).
 - A real checkout step with a product summary, a dual-currency price, and a PIX QR code/copy-paste code when a real gateway is active — plus a duplicate-purchase guard so a game already owned or in flight can't be bought twice (`notes.md` 40, 42).
 - A second admin view, `/admin/events`, listing and filtering every event/message across all five services — not scoped to one order — composed from four admin "list all" endpoints the same way the per-order audit trail is (`notes.md` 43).
