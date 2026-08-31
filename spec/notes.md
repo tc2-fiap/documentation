@@ -596,3 +596,27 @@ It also matches `base-project` exactly, so nothing new has to be built or explai
 **Consequence for cross-references.** Every place a sibling repo is named — the repo tables in this repo's own `README.*.md` and in `spec/instructions.md` §3, and the first substantive mention of a sibling service inside another service's own `README.*.md` (e.g. `catalog-api`'s README linking `users-api` and `orders-api`) — now links to its `github.com/tc2-fiap/<name>` URL, following the same pattern entry 45 established for `base-project`: existing local relative paths (`../orders-api/README.en-US.md`, etc.) were left in place for same-workspace navigation; only bare name-mentions gained a public pointer. Every repo's default branch came back as `master` (from `git init`'s local default), not `main` — anything linking a specific file inside one of these repos in the future should use `blob/master/<path>`, not assume `main`.
 
 **Revisit if:** `documentation` is published later — at that point it gets the same self-link treatment (first-mention link to `github.com/tc2-fiap/documentation`) from every other repo's README, mirroring how `orchestration`, `frontend`, etc. already reference each other. Also revisit if any of these repos' default branch is ever renamed to `main` for consistency with `base-project` — deep links assuming `master` would need updating at that point.
+
+*(Superseded by entries 48 and 49 below, both closing the two open items this entry's "Revisit if" flagged.)*
+
+---
+
+## 48. All seven `tc2-fiap` repos' default branch renamed from `master` to `main`
+
+**Decision.** Entry 47 left every published repo on `master` (`git init`'s local default, never overridden). Each was renamed to `main`: push the renamed local branch, flip the GitHub-side default branch via the API, then delete the old `master` ref — for `users-api`, `catalog-api`, `orders-api`, `payments-api`, `notifications-api`, `frontend`, and `orchestration`.
+
+**Why now.** Each repo's own `.github/workflows/ci.yml` (adapted from `base-project`'s, per `notes.md` 26/entry on CI parity) triggers on `push: branches: [main]`. On `master`, that trigger never matched — CI had silently never run on any of these repos since publishing, not because of the `git init`-was-never-run history `narrative/DOCUMENTATION.md` §11 originally blamed, but because of this branch-name mismatch (found and corrected in the same pass that fixed that stale claim). Renaming to `main` makes CI actually fire on the next push, and matches `base-project`'s own branch naming for consistency.
+
+**Consequence.** No links needed updating — every reference added for entries 45 and 47 pointed at a repo root or a bare service name, never a `blob/<branch>/<path>` deep link into one of these seven repos, so nothing was pinned to `master` that needed correcting.
+
+**Revisit if:** any of these repos' CI workflow is later repointed at a different branch (e.g. a `develop` default) — the trigger and the default branch need to move together, the same lesson this entry exists to record.
+
+---
+
+## 49. `documentation` published; self-linked from every other repo's README
+
+**Decision.** `repos/documentation/` — held back deliberately when the other seven repos were published (entry 47) — is now also public at `github.com/tc2-fiap/documentation`, `main` branch from the start (`git init -b main`, sidestepping entry 48's rename dance). Every other repo's README (`users-api`, `catalog-api`, `orders-api`, `payments-api`, `notifications-api`, `frontend`, `orchestration`, both languages) had its existing `../documentation/`-pointing sentence extended with a companion link to the public repo, following the same shape entries 45 and 47 established: the local relative path stays exactly as it was for same-workspace navigation, and the public URL is added alongside it, not in place of it.
+
+**What shipped with it.** Just the markdown tree — `README.md`/`.en-US.md`/`.pt-BR.md`, `narrative/`, `spec/`, `features/` — plus a two-line `.gitignore` for OS junk. No secrets risk to check (no `.env`, no config files, nothing but prose), unlike entry 47's five .NET services.
+
+**Revisit if:** `documentation` ever needs its own CI (a link-checker workflow, say, running the same relative-link-resolution script used manually throughout entries 44–49) — right now it has none, unlike every other published repo.
