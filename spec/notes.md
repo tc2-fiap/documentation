@@ -804,3 +804,26 @@ Both README variants also opened with "Two things live here," implying `document
 - Catalog gained a 2–6 column grid-density control, persisted to `localStorage` (`fiap-games-catalog-grid-cols`), applied via an inline `gridTemplateColumns` style scoped to that page only — Library's `.grid` usage (fixed `auto-fill`/`minmax`) is untouched.
 
 **Revisit if:** Admin/Orders' price-range ceiling (2000 BRL) stops being representative of real order totals — at that point derive it from data instead of a fixed constant, the same kind of fix entry 59 already flagged for the `pageSize=100` bootstrap ceiling.
+
+---
+
+## 61. Nav hamburger becomes a left-side slide-out drawer; trigger moves left of the logo
+
+**Decision.** Entry 60 introduced the hamburger as a small dropdown panel anchored just right of the logo. That interaction model is replaced here with a standard off-canvas drawer: a fixed, full-viewport-height panel that slides in from the left edge, dismissed by a click on its overlay or on any of its links. The trigger button itself moves from inside `<nav>` (right of the logo) to a new `.navbar-brand` wrapper that groups it immediately left of the logo.
+
+Nothing else about entry 60 changes — same four links (Catalog, Library, Admin, System Events), same `isAdmin` gating, same `HamburgerIcon`/`CloseIcon` swap on toggle. Catalog's grid-density picker keeps its own unrelated `.nav-dropdown` usage untouched; only the nav hamburger's now-dead `.navbar nav { position: relative }` anchoring rule was removed, since the drawer positions itself with `position: fixed` instead.
+
+**Revisit if:** a second off-canvas drawer is ever needed elsewhere — at that point `.nav-drawer`/`.nav-drawer-overlay` should be generalized instead of duplicated.
+
+---
+
+## 62. Drawer keeps the header visible, gains a third "mixed" theme, Logout, and Admin/Orders shows user names
+
+**Decision.** Three quick follow-ups to entries 60–61, from the same conversation:
+
+- **The drawer no longer overlays the header.** `.nav-drawer`/`.nav-drawer-overlay` now start at `top: var(--navbar-height)` (a new `64px` token in `theme.css`) instead of `top: 0`, and `.navbar` gets a matching `min-height` so that value stays accurate. The header bar stays visible and clickable above the open drawer.
+- **The theme toggle gains a third "mixed" option** (`Theme` is now `'dark' | 'light' | 'mixed'`): the whole app uses the light palette except the header, which stays dark. Implemented purely with CSS custom-property rescoping — `[data-theme='mixed'] .navbar` redeclares the dark palette's variables, and `[data-theme='mixed'] .nav-drawer` redeclares the light ones again on top of that, since the drawer is DOM-nested inside `.navbar` (for the fixed-positioning trick in entry 61) but is visually page content, not header chrome. No JS branching needed. The old 2-option pill-switch UI (a single boolean `role="switch"`) was replaced with a 3-button `role="radiogroup"`/`role="radio"` segmented control (`.theme-toggle`), since a boolean switch can't represent three states — each option is independently clickable rather than cycling.
+- **Admin/Orders' order list shows the user's name instead of a truncated id.** New `usersApi.getById` (`GET /api/users/{id}`, already existed server-side, just unused by the frontend). `AdminOrdersPage` resolves the unique `userId`s in each fetched page of orders to names and caches them in a `userNames` map, falling back to the truncated id if a lookup fails — same "compose at the view layer" pattern as the name-search filters already on this page (entry 60), just resolving id→name instead of name→id.
+- **The drawer also gets a Logout entry**, duplicating the one already in the always-visible top-right nav — convenient once the drawer covers most of the vertical nav real estate.
+
+**Revisit if:** a page other than Admin/Orders needs the same userId→name resolution — at that point extract it into a small shared hook instead of duplicating the fetch-and-cache logic.
