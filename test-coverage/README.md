@@ -1,3 +1,3 @@
 # Test coverage
 
-Coverage reports for each backend service's test suite.
+Read this in [English](TEST_COVERAGE.en-US.md) · Leia em [Português](TEST_COVERAGE.pt-BR.md)
