@@ -14,7 +14,7 @@ O foco aqui é o mesmo do [`base-project/docs/DOCUMENTATION.md`](https://github.
 |---|---|
 | [`GETTING_STARTED.pt-BR.md`](GETTING_STARTED.pt-BR.md) | Pré-requisitos, subida do cluster, verificação, um passo a passo de demonstração |
 | [`instructions.md`](../spec/instructions.md) | A especificação — arquitetura, responsabilidades de cada serviço, contratos de eventos, critérios de aceitação (em inglês) |
-| [`notes.md`](../spec/notes.md) | Registro de decisões — 50 entradas, cada uma com a alternativa rejeitada e o que a reabriria (em inglês) |
+| [`notes.md`](../spec/notes.md) | Registro de decisões — 53 entradas, cada uma com a alternativa rejeitada e o que a reabriria (em inglês) |
 | [`bdd.md`](../spec/bdd.md) | Cenários de aceitação em Gherkin — a camada de aceitação do projeto (em inglês) |
 | [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Identidade visual — tokens de cor, marca, logomarca, favicon (aplicados literalmente no frontend) |
 | [`base-project/docs/DOCUMENTATION.md`](https://github.com/KainanGuerra/fiap-games/blob/main/docs/DOCUMENTATION.md) | Como o monólito de referência que este sistema substitui foi construído |
@@ -75,9 +75,10 @@ Toda seta em direção ao Postgres usa um role restrito a exatamente um schema �
 | `users-api` | `User` | Id, Name, Email (único), PasswordHash (anulável — nulo para contas somente-Google), GoogleSubjectId, Role (`Player`/`Admin`) |
 | `users-api` | `UserEvent` | Id, UserId, EventType, Payload (JSON bruto), OccurredAtUtc — o log de auditoria de eventos de todo o sistema (`notes.md` 43) |
 | `catalog-api` | `Game` | Id, Title, Genre, Platform, Description, Price, ReleaseDate, CoverImageUrl (anulável — só exibição, ver §7.3) |
-| `orders-api` | `Order` | Id, UserId, GameId, Price (**snapshot**, nunca ao vivo), Status (`Pending → Paid \| Failed`, unidirecional) |
+| `orders-api` | `Order` | Id, UserId, Status (`Pending → Paid \| Failed`, unidirecional), CreatedAtUtc, UpdatedAtUtc — um checkout de carrinho registra um único `Order` para vários jogos, então preço e identidade por jogo vivem em `OrderItem`, não aqui (`notes.md` 51) |
+| `orders-api` | `OrderItem` | Id, OrderId, GameId, Price (**snapshot**, nunca ao vivo); UserId e Status são cópias desnormalizadas do `Order` pai, mantidas em sincronia por `Order.MarkPaid`/`MarkFailed` — necessárias só para viabilizar as duas restrições de banco abaixo; `Order.Status` continua sendo a fonte única da verdade (`notes.md` 51, 52) |
 | `orders-api` | `OrderEvent` | Id, OrderId, EventType, Payload (JSON bruto), OccurredAtUtc — o log de auditoria por pedido |
-| `payments-api` | `Payment` | Id, OrderId (único), UserId, GameId, Price, Status (`Processing`/`Approved`/`Rejected` — só interno, nunca trafega entre serviços), Gateway, ExternalReference, RequestPayload, ResponsePayload, PixCopyPasteCode, PixQrCodeBase64 (ambos anuláveis — só gateways PIX reais, ver §7.3), NextPollAtUtc, PollAttempts |
+| `payments-api` | `Payment` | Id, OrderId (único), UserId, Price, Status (`Processing`/`Approved`/`Rejected` — só interno, nunca trafega entre serviços), Gateway, ExternalReference, RequestPayload, ResponsePayload, PixCopyPasteCode, PixQrCodeBase64 (ambos anuláveis — só gateways PIX reais, ver §7.3), NextPollAtUtc, PollAttempts |
 | `notifications-api` | `Notification` | Id, DedupeKey (único), Type, UserId, OrderId (anulável), Recipient, Subject, Body, Channel, Status, ProviderRequestPayload, ProviderResponsePayload |
 | `notifications-api` | `UserProjection` | UserId (chave), Name, Email — um read-model local, não uma leitura entre serviços (ver §7) |
 
@@ -104,7 +105,7 @@ O `orders-api` também carrega as tabelas do **outbox transacional do MassTransi
 
 ## 7. Comunicação orientada a eventos
 
-Dois fluxos, ambos contratos fixos entre serviços (`instructions.md` §8) — renomear ou remodelar qualquer um deles casualmente quebra cinco serviços de uma vez.
+Dois fluxos, ambos contratos fixos entre serviços (`instructions.md` §8) — renomear ou remodelar qualquer um deles casualmente quebra cinco serviços de uma vez. O contrato do fluxo de compra *foi* deliberadamente remodelado uma vez, para suportar pedidos com múltiplos itens — a única exceção documentada a essa regra, não um desvio casual (`notes.md` 51).
 
 ### 7.1 Cadastro
 
@@ -137,11 +138,11 @@ sequenceDiagram
     participant P as payments-api
     participant N as notifications-api
 
-    C->>O: POST /api/orders {GameId}
-    O->>Cat: GET /api/games/{id}  (síncrono, apenas consulta de preço)
+    C->>O: POST /api/orders {GameIds}
+    O->>Cat: GET /api/games/{id}  (síncrono, uma vez por jogo pedido)
     Cat-->>O: preço
-    O->>O: cria Order (Pending), adiciona OrderEvent
-    O->>R: publica OrderPlacedEvent (mesma transação — outbox)
+    O->>O: cria Order (Pending) com um OrderItem por jogo, adiciona OrderEvent
+    O->>R: publica OrderPlacedEvent {GameIds, TotalPrice} (mesma transação — outbox)
     R->>P: OrderPlacedEvent
     P->>P: TryClaim por OrderId (idempotente)
     P->>P: IPaymentGateway.ChargeAsync (regra de preço determinística)
@@ -155,18 +156,19 @@ sequenceDiagram
     N->>N: envia confirmação ou aviso de falha
 ```
 
-A leitura síncrona de preço (§ Orders → Catalog) é uma consulta que acontece *antes* do fluxo começar — o fluxo em si nunca bloqueia esperando outro serviço depois que o `OrderPlacedEvent` é publicado (`instructions.md` §6, §8). Antes até dessa leitura, o `OrderService.CreateAsync` verifica `IOrderRepository.HasActiveOrderAsync(userId, gameId)` — um usuário que já possui o jogo (`Paid`) ou tem uma compra em andamento para ele (`Pending`) recebe `409 Conflict`; um `Order` anterior `Failed` nunca bloqueia uma nova tentativa (`notes.md` 42).
+A leitura síncrona de preço (§ Orders → Catalog) é uma consulta que acontece *antes* do fluxo começar, uma vez por jogo pedido — o fluxo em si nunca bloqueia esperando outro serviço depois que o `OrderPlacedEvent` é publicado (`instructions.md` §6, §8). Antes até dessa leitura, o `OrderService.CreateAsync` verifica `IOrderRepository.GetConflictingGameIdsAsync(userId, gameIds)` — um usuário que já possui qualquer jogo pedido (`Paid`) ou tem uma compra em andamento para ele (`Pending`) tem o pedido *inteiro* rejeitado com `409 Conflict`, tudo ou nada em vez de cumprimento parcial; um item anterior `Failed` nunca bloqueia uma nova tentativa (`notes.md` 42). Essa verificação sozinha é vulnerável a condição de corrida (TOCTOU) sob requisições concorrentes, então ela é reforçada por dois índices únicos reais do Postgres em `order_items` — `(order_id, game_id)` e um índice parcial `(user_id, game_id) WHERE status <> 'Failed'` — que o `OrderService.CreateAsync` também precisa capturar como uma violação de unicidade (`DbUpdateException`/`PostgresException`) e traduzir para o mesmo `409`, para o caso raro de duas requisições concorrentes passarem ambas pela verificação da aplicação (`notes.md` 52, verificado contra uma instância real do Postgres).
 
 **Idempotência, na prática.** Todo consumer acima ou verifica uma chave de dedupe antes de agir (`notifications-api`, nos dois eventos) ou é naturalmente idempotente pelo próprio estado do domínio (`MarkPaid`/`MarkFailed` do `orders-api` viram no-op assim que o pedido sai de `Pending`; `payments-api` verifica se já existe um `Payment` antes de cobrar). Verificado ao vivo com uma ferramenta descartável de replay do MassTransit: reentregar qualquer um desses três eventos produz zero efeitos duplicados — nenhum segundo e-mail, nenhum segundo `Payment`, nenhum pedido revertendo de estado.
 
 **Quando um gateway real está configurado** (`PaymentGateway:Providers` inclui `abacatepay` e/ou `mercadopago`), o passo `P->>P: IPaymentGateway.ChargeAsync` acima passa a resolver via `PaymentGatewayChain` e pode retornar `Processing` em vez de um resultado final — o `payments-api` ainda persiste a linha `Payment`, mas **não** publica `PaymentProcessedEvent` ainda. Um `PaymentStatusPollingService` em background então consulta o provedor real com backoff exponencial até resolver (ou expirar em um `Rejected` forçado), publicando só então. O `Order` permanece `Pending` o tempo todo do ponto de vista do `orders-api` — nenhum contrato de evento mudou. Veja `notes.md` 38 para o design completo, incluindo por que o polling substitui o receptor de webhook, que está construído mas atualmente inativo.
 
-### 7.3 Exibição da cotação e o checkout (adições síncronas, sem eventos novos)
+### 7.3 Exibição da cotação, o checkout e o status ao vivo (adições síncronas/HTTP, sem eventos novos)
 
-Duas adições posteriores, puramente síncronas, convivem com os fluxos acima sem mudar nenhum dos dois contratos de evento (`notes.md` 39, 40):
+Três adições posteriores, puramente síncronas/HTTP, convivem com os fluxos acima sem mudar nenhum dos dois contratos de evento do broker (`notes.md` 39, 40, 53):
 
 - **`GET /api/quotations/usd-brl`** (`catalog-api`) faz proxy de uma cotação USD→BRL ao vivo — Frankfurter primeiro, ExchangeRate-API como fallback automático, ambos sem chave, com a cotação resolvida cacheada em memória por uma hora. O frontend é o único consumidor que converte algo: o preço em BRL de um jogo só é exibido em USD quando o idioma da interface está em inglês, voltando ao BRL nativo se a cotação estiver indisponível. `Game.Price`/`Order.Price`/`Payment.Price` nunca mudam de significado — isto é só exibição, do início ao fim.
-- **`GET /api/payments/checkout/{orderId}`** (`payments-api`) é uma segunda rota, voltada ao jogador, ao lado da já existente `GET /api/payments/{orderId}` (admin-only): qualquer usuário autenticado pode chamá-la para o *próprio* pedido (posse verificada contra `Payment.UserId`; uma divergência retorna `404`), recebendo uma visão restrita (status, gateway, preço e — só quando um gateway PIX real gerou um — uma imagem de QR code e o código copia-e-cola) em vez dos payloads brutos completos da rota de admin. A página `/orders/:orderId` já existente no frontend é o passo de checkout que consome isso: um item de linha do produto (buscado separadamente no `catalog-api`, já que o `Order` em si não carrega nenhum detalhe do jogo além do `GameId`), o preço em duas moedas e — enquanto `Pending` e com um gateway real ativo — o bloco do QR code PIX. Com o gateway padrão `simulated` não há nada para escanear; o pedido ainda assim se resolve sozinho pelo mecanismo de polling/atraso já existente.
+- **`GET /api/payments/checkout/{orderId}`** (`payments-api`) é uma segunda rota, voltada ao jogador, ao lado da já existente `GET /api/payments/{orderId}` (admin-only): qualquer usuário autenticado pode chamá-la para o *próprio* pedido (posse verificada contra `Payment.UserId`; uma divergência retorna `404`), recebendo uma visão restrita (status, gateway, preço e — só quando um gateway PIX real gerou um — uma imagem de QR code e o código copia-e-cola) em vez dos payloads brutos completos da rota de admin. O `Order` em si não carrega nenhum detalhe do jogo além dos `GameId`s dos seus itens, então o frontend resolve o título de cada jogo comprado separadamente no `catalog-api`. Essa chamada agora acontece uma única vez, quando o pedido é observado pela primeira vez como `Pending` (com uma nova tentativa curta e limitada, já que a linha `Payment` é criada de forma assíncrona e pode ainda não existir), não repetidamente — veja o item de SSE abaixo para saber por que não existe mais um ciclo periódico para prender essa chamada. Com o gateway padrão `simulated` não há nada para escanear; o pedido ainda assim se resolve sozinho pelo mecanismo de atraso já existente.
+- **`GET /api/orders/{id}/stream`** (`orders-api`, Server-Sent Events) entrega a transição `Pending → Paid | Failed` para a página de status do pedido no frontend sem polling: envia o status atual do pedido imediatamente, depois mais uma atualização no momento em que o pedido sai de `Pending`, e então encerra. Sustentado por um novo singleton `IOrderStatusBroadcaster` (um canal `System.Threading.Channels` por `OrderId` em andamento), alimentado pelo `PaymentProcessedConsumer` logo depois que ele confirma uma transição para `Paid`/`Failed` — implementado com o suporte nativo do ASP.NET Core a SSE em Minimal APIs (`TypedResults.ServerSentEvents`, já disponível no target `net10.0` do serviço, sem pacote novo). O frontend não pode usar a API `EventSource` do navegador aqui, já que ela não consegue enviar um cabeçalho `Authorization` e colocar o JWT na URL vazaria para logs do servidor e para o histórico do navegador — em vez disso, um leitor feito à mão (`src/api/sse.ts`) envia a requisição via `fetch` com o mesmo cabeçalho de bearer de qualquer outra chamada e interpreta sozinho os frames `text/event-stream`. Isso só é seguro como mecanismo em memória, por pod, porque o `orders-api` roda em uma única réplica; escalá-lo horizontalmente exigiria um backplane de verdade (por exemplo, uma fila do RabbitMQ em modo fanout) em vez disso. O Ingress (`repos/orchestration/templates/ingress.yaml`) precisou de `nginx.ingress.kubernetes.io/proxy-buffering: "off"` e de `proxy-read-timeout`/`proxy-send-timeout` maiores (`"120"`, acima do padrão de 60s do nginx) — ambos fatais para uma conexão de longa duração, e antes ausentes já que o Ingress não tinha nenhuma anotação. Veja `notes.md` 53.
 
 ## 8. RBAC e a trilha de auditoria entre serviços
 
@@ -200,7 +202,7 @@ Só o `users-api` precisou de uma tabela nova (`UserEvent`) — era o único ser
 
 ## 9. Qualidade: testes, tratamento de erros e observabilidade
 
-- **109 testes de backend** distribuídos entre cinco serviços (users 18, catalog 17, orders 17, payments 52, notifications 5), todos na camada de serviço com repositório mockado — nenhum Postgres ou RabbitMQ ao vivo em nenhuma suíte. A regra determinística de preço do `payments-api` é testada exatamente no limite de `999.00`; o mapeamento de vocabulário do `AbacatePayGateway`/`MercadoPagoGateway` e a extração dos campos do QR code PIX, o comportamento de fallback do `PaymentGatewayChain`, a lógica de backoff/timeout do `PaymentStatusPollingWorker` e o fallback/cache do `QuotationService` do `catalog-api` também têm cobertura (HTTP mockado via um `HttpMessageHandler` falso, nenhuma chamada real ao sandbox — veja `notes.md` 38, 39).
+- **117 testes de backend** distribuídos entre cinco serviços (users 18, catalog 17, orders 25, payments 52, notifications 5), todos na camada de serviço com repositório mockado — nenhum Postgres ou RabbitMQ ao vivo em nenhuma suíte. A fatia do `orders-api` cresceu com a migração para pedidos com múltiplos itens: cobertura para registrar um pedido com vários jogos, o caminho de rejeição do pedido inteiro por qualquer conflito, e o comportamento do `OrderStatusBroadcaster` por trás do endpoint de SSE (`notes.md` 51, 53). A regra determinística de preço do `payments-api` é testada exatamente no limite de `999.00`; o mapeamento de vocabulário do `AbacatePayGateway`/`MercadoPagoGateway` e a extração dos campos do QR code PIX, o comportamento de fallback do `PaymentGatewayChain`, a lógica de backoff/timeout do `PaymentStatusPollingWorker` e o fallback/cache do `QuotationService` do `catalog-api` também têm cobertura (HTTP mockado via um `HttpMessageHandler` falso, nenhuma chamada real ao sandbox — veja `notes.md` 38, 39).
 - **Tratamento global de exceções**: um `GlobalExceptionHandler` idêntico (copiado por serviço) captura qualquer coisa não tratada, registra tudo no lado do servidor e retorna um `ProblemDetails` genérico com um trace id — nunca um stack trace para o cliente.
 - **Logging estruturado**: cada serviço emite uma linha de log JSON por requisição (Serilog + `CompactJsonFormatter`), e toda publicação/consumo registra `{OrderId}` (ou `{UserId}` no cadastro) como propriedade nomeada — confirmado ao vivo que um único `OrderId` rastreia uma compra pelos logs de `orders-api`, `payments-api` e `notifications-api`.
 - **Padrão Result**: toda falha esperada (não encontrado, conflito, não autorizado, validação) é um `Result`/`Result<T>`, mapeado para um status HTTP pela extensão compartilhada `ToHttpResult()` — nunca uma exceção para um caso que o chamador deveria razoavelmente esperar.
@@ -215,11 +217,12 @@ Só o `users-api` precisou de uma tabela nova (`UserEvent`) — era o único ser
   |---|---|
   | `/api/users/*` | `users-api` |
   | `/api/games/*`, `/api/quotations/*` | `catalog-api` |
-  | `/api/orders/*`, `/api/library` | `orders-api` |
+  | `/api/orders/*`, `/api/library` | `orders-api`; `/api/orders/{id}/stream` é o endpoint de Server-Sent Events por trás da UI de status de pedido ao vivo (`notes.md` 53) |
   | `/api/payments/{orderId}`, `/api/payments/admin` | `payments-api`, admin-only; `/api/payments/checkout/{orderId}` é uma rota separada, voltada ao jogador e com verificação de posse, no mesmo prefixo (`notes.md` 40); `/api/payments/webhooks/{provider}` está construído e conectado, mas inativo — esta topologia local confirma cobranças de gateway real por polling, não por webhook; veja `notes.md` 38 |
   | `/api/notifications/*` | `notifications-api` (admin-only) |
   | `/*` | `frontend` |
 
+- **Anotações do Ingress**: o único recurso Ingress não tinha nenhuma até o endpoint de SSE precisar delas — `nginx.ingress.kubernetes.io/proxy-buffering: "off"` e `proxy-read-timeout`/`proxy-send-timeout: "120"`, já que o buffering e o timeout padrão de 60s do nginx quebrariam uma conexão de longa duração em `/api/orders/{id}/stream`. Elas se aplicam a todo o sistema (um único Ingress para todas as rotas), mas são inofensivas para o tráfego comum de requisição/resposta (`notes.md` 53).
 - **Auditoria de secrets**: `helm template | grep -iE "password\|secret\|apikey"` só expõe valores literais dentro dos próprios recursos `Secret` — toda env var de `Deployment` que referencia um deles usa `secretKeyRef`, confirmado em todos os seis charts.
 - **Dois ambientes de execução** (`notes.md` 24): todo repositório de backend também carrega seu próprio `docker-compose.yml`, subindo apenas aquele serviço mais a infraestrutura que ele sozinho precisa, tornando-o desenvolvível de forma independente, sem o cluster.
 
@@ -234,10 +237,12 @@ Cada um dos seis repositórios carrega seu próprio `.github/workflows/ci.yml`, 
 - Isolamento de schema do Postgres por serviço, garantido por concessões de role e verificado ao vivo por uma consulta entre schemas recusada.
 - Um papel de admin com trilha de auditoria entre serviços composta a partir de quatro endpoints independentes, e login com Google e envio real de e-mail opcionais, ambos degradando graciosamente para "desligado" quando não configurados.
 - Subida do cluster em um único comando (`helm install`) verificada com zero reinícios a partir de um estado genuinamente limpo.
-- Uma especificação escrita (`instructions.md`), um registro de decisões com 50 entradas (`notes.md`) e cenários de aceitação em Gherkin (`bdd.md`).
+- Uma especificação escrita (`instructions.md`), um registro de decisões com 53 entradas (`notes.md`) e cenários de aceitação em Gherkin (`bdd.md`).
 - Documentação narrativa bilíngue (inglês/português) — este documento, o `GETTING_STARTED.md` e o `README.md` de cada repositório — e uma alternância de idioma inglês/pt-BR no próprio frontend; todo preço continua sendo um `decimal` em BRL de ponta a ponta, exibido em R$ ou convertido para um valor em USD só de exibição, dependendo da alternância (`notes.md` 35, 36, 39).
 - Um passo de checkout real com resumo do produto, preço em duas moedas e um QR code/código copia-e-cola PIX quando um gateway real está ativo — além de uma trava contra compra duplicada, para que um jogo já possuído ou em andamento não possa ser comprado de novo (`notes.md` 40, 42).
 - Uma segunda visão de admin, `/admin/events`, listando e filtrando todo evento/mensagem entre os cinco serviços — não restrita a um pedido — composta a partir de quatro endpoints de admin "listar tudo", da mesma forma que a trilha de auditoria por pedido (`notes.md` 43).
+- Um carrinho em `localStorage` e uma página de confirmação `/checkout` pelas quais passam tanto o checkout do carrinho quanto o atalho `Comprar agora` do catálogo — nenhum caminho de compra pula a etapa de revisão — sustentados por `Order` ter se tornado um agregado real com múltiplos itens, com as regras de jogo duplicado no mesmo pedido e de posse duplicada agora reforçadas por índices únicos reais do Postgres em `order_items`, não apenas por verificações da aplicação (`notes.md` 51, 52).
+- Status de pedido/pagamento ao vivo via Server-Sent Events (`GET /api/orders/{id}/stream`) em vez do cliente fazer polling a cada dois segundos (`notes.md` 53).
 
 ## 13. Conclusão
 

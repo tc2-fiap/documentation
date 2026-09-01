@@ -14,7 +14,7 @@ The focus here is the same as [`base-project/docs/DOCUMENTATION.md`](https://git
 |---|---|
 | [`GETTING_STARTED.en-US.md`](GETTING_STARTED.en-US.md) | Prerequisites, cluster bring-up, verification, a demo walkthrough |
 | [`instructions.md`](../spec/instructions.md) | The spec — architecture, service responsibilities, event contracts, acceptance criteria |
-| [`notes.md`](../spec/notes.md) | Decision record — 50 entries, each with the rejected alternative and what would reopen it |
+| [`notes.md`](../spec/notes.md) | Decision record — 53 entries, each with the rejected alternative and what would reopen it |
 | [`bdd.md`](../spec/bdd.md) | Gherkin acceptance scenarios — the project's acceptance layer |
 | [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Brand identity — color tokens, wordmark, logo mark, favicon (applied verbatim in the frontend) |
 | [`base-project/docs/DOCUMENTATION.md`](https://github.com/KainanGuerra/fiap-games/blob/main/docs/DOCUMENTATION.md) | How the reference monolith this system replaces is built |
@@ -75,9 +75,10 @@ Every arrow into Postgres uses a role scoped to exactly one schema — a cross-s
 | `users-api` | `User` | Id, Name, Email (unique), PasswordHash (nullable — null for Google-only accounts), GoogleSubjectId, Role (`Player`/`Admin`) |
 | `users-api` | `UserEvent` | Id, UserId, EventType, Payload (raw JSON), OccurredAtUtc — the system-wide event audit log (`notes.md` 43) |
 | `catalog-api` | `Game` | Id, Title, Genre, Platform, Description, Price, ReleaseDate, CoverImageUrl (nullable — display only, see §7.3) |
-| `orders-api` | `Order` | Id, UserId, GameId, Price (**snapshot**, never live), Status (`Pending → Paid \| Failed`, one-way) |
+| `orders-api` | `Order` | Id, UserId, Status (`Pending → Paid \| Failed`, one-way), CreatedAtUtc, UpdatedAtUtc — a cart checkout places one `Order` for several games, so pricing and per-game identity live on `OrderItem`, not here (`notes.md` 51) |
+| `orders-api` | `OrderItem` | Id, OrderId, GameId, Price (**snapshot**, never live); UserId and Status are denormalized copies of the parent `Order`'s, kept in sync by `Order.MarkPaid`/`MarkFailed` — needed only so the two DB constraints below can be expressed, `Order.Status` stays the single source of truth (`notes.md` 51, 52) |
 | `orders-api` | `OrderEvent` | Id, OrderId, EventType, Payload (raw JSON), OccurredAtUtc — the per-order audit log |
-| `payments-api` | `Payment` | Id, OrderId (unique), UserId, GameId, Price, Status (`Processing`/`Approved`/`Rejected` — local only, never on the wire), Gateway, ExternalReference, RequestPayload, ResponsePayload, PixCopyPasteCode, PixQrCodeBase64 (both nullable — real PIX gateways only, see §7.3), NextPollAtUtc, PollAttempts |
+| `payments-api` | `Payment` | Id, OrderId (unique), UserId, Price, Status (`Processing`/`Approved`/`Rejected` — local only, never on the wire), Gateway, ExternalReference, RequestPayload, ResponsePayload, PixCopyPasteCode, PixQrCodeBase64 (both nullable — real PIX gateways only, see §7.3), NextPollAtUtc, PollAttempts |
 | `notifications-api` | `Notification` | Id, DedupeKey (unique), Type, UserId, OrderId (nullable), Recipient, Subject, Body, Channel, Status, ProviderRequestPayload, ProviderResponsePayload |
 | `notifications-api` | `UserProjection` | UserId (key), Name, Email — a local read-model, not a cross-service read (see §7) |
 
@@ -104,7 +105,7 @@ Unlike `base-project`'s schemaless MongoDB (index migrations only), this system 
 
 ## 7. Event-driven communication
 
-Two flows, both fixed contracts across services (`instructions.md` §8) — renaming or reshaping either casually breaks five services at once.
+Two flows, both fixed contracts across services (`instructions.md` §8) — renaming or reshaping either casually breaks five services at once. The purchase flow's contract *was* deliberately reshaped once, to support multi-item orders — the one documented exception to that rule, not a casual drift (`notes.md` 51).
 
 ### 7.1 Registration
 
@@ -137,11 +138,11 @@ sequenceDiagram
     participant P as payments-api
     participant N as notifications-api
 
-    C->>O: POST /api/orders {GameId}
-    O->>Cat: GET /api/games/{id}  (sync, price lookup only)
+    C->>O: POST /api/orders {GameIds}
+    O->>Cat: GET /api/games/{id}  (sync, once per requested game)
     Cat-->>O: price
-    O->>O: create Order (Pending), append OrderEvent
-    O->>R: publish OrderPlacedEvent (same transaction — outbox)
+    O->>O: create Order (Pending) with one OrderItem per game, append OrderEvent
+    O->>R: publish OrderPlacedEvent {GameIds, TotalPrice} (same transaction — outbox)
     R->>P: OrderPlacedEvent
     P->>P: TryClaim by OrderId (idempotent)
     P->>P: IPaymentGateway.ChargeAsync (deterministic price rule)
@@ -155,18 +156,19 @@ sequenceDiagram
     N->>N: send confirmation or failure notice
 ```
 
-The synchronous price read (§ Orders → Catalog) is a query that happens *before* the flow starts — the flow itself never blocks on another service once `OrderPlacedEvent` is published (`instructions.md` §6, §8). Before even that read, `OrderService.CreateAsync` checks `IOrderRepository.HasActiveOrderAsync(userId, gameId)` — a user who already owns the game (`Paid`) or has a purchase for it in flight (`Pending`) gets `409 Conflict`; a prior `Failed` order never blocks a retry (`notes.md` 42).
+The synchronous price read (§ Orders → Catalog) is a query that happens *before* the flow starts, once per requested game — the flow itself never blocks on another service once `OrderPlacedEvent` is published (`instructions.md` §6, §8). Before even that read, `OrderService.CreateAsync` checks `IOrderRepository.GetConflictingGameIdsAsync(userId, gameIds)` — a user who already owns any requested game (`Paid`) or has a purchase for it in flight (`Pending`) gets the *whole* order rejected with `409 Conflict`, all-or-nothing rather than partial fulfillment; a prior `Failed` item never blocks a retry (`notes.md` 42). That check alone is TOCTOU-racy under concurrent requests, so it's backed by two real Postgres unique indexes on `order_items` — `(order_id, game_id)` and a partial `(user_id, game_id) WHERE status <> 'Failed'` — which `OrderService.CreateAsync` also has to catch as a `DbUpdateException`/`PostgresException` unique-violation and translate into the same `409`, for the rare case two concurrent requests both pass the application check (`notes.md` 52, verified against a live Postgres instance).
 
 **Idempotency, concretely.** Every consumer above either checks a dedupe key before acting (`notifications-api`, both events) or is naturally idempotent by domain state (`orders-api`'s `MarkPaid`/`MarkFailed` no-op once the order has left `Pending`; `payments-api` checks for an existing `Payment` row before charging). Verified live with a throwaway MassTransit replay tool: redelivering any of these three events produces zero duplicate effects — no second email, no second `Payment` row, no order flipping backwards.
 
 **When a real gateway is configured** (`PaymentGateway:Providers` includes `abacatepay` and/or `mercadopago`), step `P->>P: IPaymentGateway.ChargeAsync` above resolves through `PaymentGatewayChain` and can return `Processing` instead of a final outcome — `payments-api` still persists the `Payment` row but does **not** publish `PaymentProcessedEvent` yet. A background `PaymentStatusPollingService` then polls the real provider on an exponential backoff until it resolves (or times out into a forced `Rejected`), and publishes then. `Order` stays `Pending` the whole time from `orders-api`'s perspective — no event contract changed. See `notes.md` 38 for the full design, including why polling stands in for the webhook receiver that's built but currently dormant.
 
-### 7.3 Quotation display and the checkout step (synchronous additions, no new events)
+### 7.3 Quotation display, checkout, and live status (synchronous/HTTP additions, no new events)
 
-Two later, purely synchronous additions sit alongside the flows above without changing either event contract (`notes.md` 39, 40):
+Three later, purely synchronous/HTTP additions sit alongside the flows above without changing either broker event contract (`notes.md` 39, 40, 53):
 
 - **`GET /api/quotations/usd-brl`** (`catalog-api`) proxies a live USD→BRL rate — Frankfurter first, ExchangeRate-API as an automatic fallback, both keyless, the resolved rate cached in-memory for an hour. The frontend is the only consumer that converts anything: a game's stored BRL price is shown as USD only when the language toggle is English, degrading to native BRL if the rate is unavailable. `Game.Price`/`Order.Price`/`Payment.Price` never change meaning — this is display-only, end to end.
-- **`GET /api/payments/checkout/{orderId}`** (`payments-api`) is a second, player-facing route alongside the existing admin-only `GET /api/payments/{orderId}` — any authenticated user can call it for their *own* order (ownership checked against `Payment.UserId`, a mismatch returns `404`), getting back a narrow view (status, gateway, price, and — only when a real PIX gateway produced one — a QR image and copy-paste code) rather than the admin route's full raw gateway payloads. The frontend's existing `/orders/:orderId` page is the checkout step that consumes it: a product line item (fetched separately from `catalog-api`, since `Order` itself carries no game details beyond `GameId`), the dual-currency price, and — while `Pending` and a real gateway is active — the PIX QR block. With the default `simulated` gateway there's nothing to scan; the order still settles on its own via the existing polling/delay mechanism.
+- **`GET /api/payments/checkout/{orderId}`** (`payments-api`) is a second, player-facing route alongside the existing admin-only `GET /api/payments/{orderId}` — any authenticated user can call it for their *own* order (ownership checked against `Payment.UserId`, a mismatch returns `404`), getting back a narrow view (status, gateway, price, and — only when a real PIX gateway produced one — a QR image and copy-paste code) rather than the admin route's full raw gateway payloads. `Order` itself carries no game details beyond its items' `GameId`s, so the frontend resolves each purchased game's title separately from `catalog-api`. This is called once, when the order is first observed `Pending` (with a short bounded retry, since the `Payment` row is created asynchronously and may not exist yet), not repeatedly — see the SSE bullet below for why there's no longer a tick to hang it off of. With the default `simulated` gateway there's nothing to scan; the order still settles on its own via the existing delay mechanism.
+- **`GET /api/orders/{id}/stream`** (`orders-api`, Server-Sent Events) delivers the `Pending → Paid | Failed` transition to the frontend's order-status page without polling: it pushes the order's current status immediately, then one more update the moment the order leaves `Pending`, then closes. Backed by a new singleton `IOrderStatusBroadcaster` (one `System.Threading.Channels` channel per in-flight `OrderId`), published to by `PaymentProcessedConsumer` right after it commits a `Paid`/`Failed` transition — implemented with ASP.NET Core's native Minimal API SSE support (`TypedResults.ServerSentEvents`, already available on the service's `net10.0` target, no new package). The frontend can't use the browser's `EventSource` API here, since it can't send an `Authorization` header and putting the JWT in the URL would leak it into server logs and browser history — instead a small hand-rolled reader (`src/api/sse.ts`) sends the request via `fetch` with the same bearer header as every other call and parses the `text/event-stream` frames itself. This is safe as an in-memory, per-pod mechanism only because `orders-api` runs a single replica; scaling it out would need a real backplane (e.g. a fanout RabbitMQ queue) instead. The Ingress (`repos/orchestration/templates/ingress.yaml`) needed `nginx.ingress.kubernetes.io/proxy-buffering: "off"` and longer `proxy-read-timeout`/`proxy-send-timeout` (`"120"`, up from nginx's 60s default) — both fatal to a long-lived connection otherwise, and previously absent since the Ingress had no annotations at all before this. See `notes.md` 53.
 
 ## 8. RBAC and the cross-service admin audit trail
 
@@ -200,7 +202,7 @@ Only `users-api` needed a new table (`UserEvent`) — it was the one service wit
 
 ## 9. Quality: tests, error handling, and observability
 
-- **109 backend tests** across five services (users 18, catalog 17, orders 17, payments 52, notifications 5), every one service-layer with a mocked repository — no live Postgres or RabbitMQ in any suite. `payments-api`'s deterministic price rule is tested at the exact `999.00` boundary; `AbacatePayGateway`/`MercadoPagoGateway`'s provider-vocabulary mapping and PIX QR field extraction, `PaymentGatewayChain`'s fallthrough behavior, `PaymentStatusPollingWorker`'s backoff/timeout logic, and `catalog-api`'s `QuotationService` fallback/caching are all covered too (HTTP mocked via a fake `HttpMessageHandler`, no live sandbox calls — see `notes.md` 38, 39).
+- **117 backend tests** across five services (users 18, catalog 17, orders 25, payments 52, notifications 5), every one service-layer with a mocked repository — no live Postgres or RabbitMQ in any suite. `orders-api`'s share grew with the move to multi-item orders: coverage for placing a multi-game order, the whole-order-rejected-on-any-conflict path, and the `OrderStatusBroadcaster` behind the SSE endpoint (`notes.md` 51, 53). `payments-api`'s deterministic price rule is tested at the exact `999.00` boundary; `AbacatePayGateway`/`MercadoPagoGateway`'s provider-vocabulary mapping and PIX QR field extraction, `PaymentGatewayChain`'s fallthrough behavior, `PaymentStatusPollingWorker`'s backoff/timeout logic, and `catalog-api`'s `QuotationService` fallback/caching are all covered too (HTTP mocked via a fake `HttpMessageHandler`, no live sandbox calls — see `notes.md` 38, 39).
 - **Global exception handling**: identical `GlobalExceptionHandler` (copied per service) catches anything unhandled, logs it in full server-side, and returns a generic `ProblemDetails` response with a trace id — never a stack trace to the client.
 - **Structured logging**: every service emits one JSON log line per request (Serilog + `CompactJsonFormatter`), and every publish/consume logs `{OrderId}` (or `{UserId}` for registration) as a named property — confirmed live that a single `OrderId` traces a purchase across `orders-api`, `payments-api`, and `notifications-api`'s logs.
 - **Result pattern**: every expected failure (not found, conflict, unauthorized, validation) is a `Result`/`Result<T>`, mapped to an HTTP status by the shared `ToHttpResult()` extension — never an exception for a case the caller should reasonably expect.
@@ -215,11 +217,12 @@ Only `users-api` needed a new table (`UserEvent`) — it was the one service wit
   |---|---|
   | `/api/users/*` | `users-api` |
   | `/api/games/*`, `/api/quotations/*` | `catalog-api` |
-  | `/api/orders/*`, `/api/library` | `orders-api` |
+  | `/api/orders/*`, `/api/library` | `orders-api`; `/api/orders/{id}/stream` is the Server-Sent Events endpoint behind the live order-status UI (`notes.md` 53) |
   | `/api/payments/{orderId}`, `/api/payments/admin` | `payments-api`, admin-only; `/api/payments/checkout/{orderId}` is a separate, player-facing, ownership-checked route on the same prefix (`notes.md` 40); `/api/payments/webhooks/{provider}` is built and wired but dormant — this local topology confirms real gateway charges by polling, not webhook, see `notes.md` 38 |
   | `/api/notifications/*` | `notifications-api` (admin-only) |
   | `/*` | `frontend` |
 
+- **Ingress annotations**: the single Ingress resource had none at all until the SSE endpoint needed them — `nginx.ingress.kubernetes.io/proxy-buffering: "off"` and `proxy-read-timeout`/`proxy-send-timeout: "120"`, since nginx's default buffering and 60s timeout would otherwise break a long-lived `/api/orders/{id}/stream` connection. They apply system-wide (one Ingress for every route) but are harmless for ordinary request/response traffic (`notes.md` 53).
 - **Secrets audit**: `helm template | grep -iE "password\|secret\|apikey"` surfaces literal values only inside `Secret` resources themselves — every `Deployment` env var referencing one uses `secretKeyRef`, confirmed across all six charts.
 - **Two runtime environments** (`notes.md` 24): every backend repo also carries its own `docker-compose.yml`, bringing up that service plus only the infrastructure it alone needs, so it's independently developable without the cluster.
 
@@ -234,10 +237,12 @@ Each of the six repos carries its own `.github/workflows/ci.yml`, adapted from [
 - Per-service Postgres schema isolation, enforced by role grants and verified live by a refused cross-schema query.
 - An admin role with a cross-service audit trail composed from four independent endpoints, and optional Google sign-in and real email delivery, both gracefully degrading to "off" when unconfigured.
 - A single-command cluster bring-up (`helm install`) verified with zero restarts from a genuinely clean state.
-- A written specification (`instructions.md`), a 50-entry decision record (`notes.md`), and Gherkin acceptance scenarios (`bdd.md`).
+- A written specification (`instructions.md`), a 53-entry decision record (`notes.md`), and Gherkin acceptance scenarios (`bdd.md`).
 - Bilingual (English/Portuguese) narrative documentation — this document, `GETTING_STARTED.md`, and every repo's `README.md` — and an English/pt-BR language toggle in the frontend itself; every price is still a BRL `decimal` end-to-end, shown as R$ or converted to a display-only USD figure depending on the toggle (`notes.md` 35, 36, 39).
 - A real checkout step with a product summary, a dual-currency price, and a PIX QR code/copy-paste code when a real gateway is active — plus a duplicate-purchase guard so a game already owned or in flight can't be bought twice (`notes.md` 40, 42).
 - A second admin view, `/admin/events`, listing and filtering every event/message across all five services — not scoped to one order — composed from four admin "list all" endpoints the same way the per-order audit trail is (`notes.md` 43).
+- A `localStorage` cart and a `/checkout` confirmation page that both cart checkout and a catalog `Buy Now` shortcut funnel through — no purchase path skips the review step — backed by `Order` becoming a true multi-item aggregate, with the duplicate-in-order and duplicate-ownership rules now enforced as real Postgres unique indexes on `order_items`, not just application checks (`notes.md` 51, 52).
+- Live order/payment status via Server-Sent Events (`GET /api/orders/{id}/stream`) instead of the client polling every two seconds (`notes.md` 53).
 
 ## 13. Conclusion
 

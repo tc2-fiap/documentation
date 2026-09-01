@@ -79,14 +79,15 @@ Also supports:
 CRUD for the game catalog — **product reference data only**. Owns the `Game` aggregate: title, genre, platform, description, price, release date. Read-heavy, not user-scoped, and deliberately **outside the purchase flow**: it publishes no events and consumes none. Its only role in a purchase is answering "does this game exist and what does it cost" when OrdersAPI asks ([§6](#6-how-orders-learns-the-price)).
 
 ### 4.3 OrdersAPI
-Owns the purchase lifecycle and, by extension, each user's library. Owns the `Order` aggregate: `OrderId`, `UserId`, `GameId`, `Price` (a **snapshot** taken at order time), `Status` (`Pending` → `Paid` | `Failed`), timestamps.
+Owns the purchase lifecycle and, by extension, each user's library. Owns the `Order` aggregate: `OrderId`, `UserId`, `Status` (`Pending` → `Paid` | `Failed`), timestamps, and a collection of `OrderItem { GameId, Price }` (each price a **snapshot** taken at order time) — a cart checkout places one order for several games, so an order is multi-item, not a single game/price pair. `TotalPrice` is the sum of its items' snapshotted prices. Two DB-level unique constraints on `order_items` keep two invariants that used to be application-only checks: a game can't appear twice in the same order, and (excluding `Failed` items) a user can't have two active order items for the same game across any of their orders. See [`notes.md`](notes.md) 51–52.
 
-- Exposes the purchase entry point (`POST /api/orders`), which validates the game and prices the order against CatalogAPI, persists the order as `Pending`, and publishes `OrderPlacedEvent`.
-- Consumes `PaymentProcessedEvent` and transitions the order to `Paid` or `Failed`.
-- Exposes the user's library (`GET /api/library`) as a projection over that user's `Paid` orders.
+- Exposes the purchase entry point (`POST /api/orders`, taking `GameIds: Guid[]`), which validates and prices each requested game against CatalogAPI, persists the order as `Pending`, and publishes `OrderPlacedEvent`.
+- Consumes `PaymentProcessedEvent` and transitions the order (and each of its items) to `Paid` or `Failed`.
+- Exposes the user's library (`GET /api/library`) as a flattened, per-game projection over the items of that user's `Paid` orders — one row per purchased game, not one row per order.
+- Exposes live order status (`GET /api/orders/{id}/stream`, Server-Sent Events) instead of requiring the client to poll — pushes the current status immediately and one more update when the order leaves `Pending`. See [`notes.md`](notes.md) 53.
 - Appends an `OrderEvent` audit row (the actual event payload, not a summary) whenever it publishes `OrderPlacedEvent` or receives `PaymentProcessedEvent`. Admin-only: `GET /api/orders/admin` (every user's orders) and `GET /api/orders/{id}/events` (that order's audit trail). See [`notes.md`](notes.md) 30.
 
-**Why the library lives here**: with refunds, gifting, and key redemption out of scope ([§12](#12-out-of-scope)), "your library" is exactly "your paid orders" — a projection, not an independent aggregate. Splitting a separate Library/Entitlements service would add a repo, a schema, and a chart for a distinction this project never exercises. If refunds ever come into scope, that equivalence breaks and Library should split out.
+**Why the library lives here**: with refunds, gifting, and key redemption out of scope ([§12](#12-out-of-scope)), "your library" is exactly "the games in your paid orders" — a projection, not an independent aggregate. Splitting a separate Library/Entitlements service would add a repo, a schema, and a chart for a distinction this project never exercises. If refunds ever come into scope, that equivalence breaks and Library should split out.
 
 **Why the price is a snapshot**: the order stores the price it was placed at, never a live reference to CatalogAPI's current price. A later sale or price change must not retroactively alter an existing order. This is the aggregate boundary doing real work.
 
@@ -163,9 +164,9 @@ The system must never present sandbox results as real transactions. This is a si
 
 ## 6. How Orders learns the price
 
-OrdersAPI needs two facts from CatalogAPI at order time: that the game exists, and what it costs. **The client must never supply the price** — a client-supplied price is the classic e-commerce exploit (buy a R$ 299 game for R$ 0.01). `POST /api/orders` accepts a `GameId` and nothing else pricing-related.
+OrdersAPI needs two facts from CatalogAPI at order time, per requested game: that it exists, and what it costs. **The client must never supply a price** — a client-supplied price is the classic e-commerce exploit (buy a R$ 299 game for R$ 0.01). `POST /api/orders` accepts `GameIds: Guid[]` — a cart can hold several games — and nothing else pricing-related. See `notes.md` 51.
 
-**Decided: a synchronous HTTP read.** OrdersAPI calls CatalogAPI at order time to confirm the game exists and to read its current price, then snapshots that price onto the Order.
+**Decided: a synchronous HTTP read, once per requested game.** OrdersAPI calls CatalogAPI at order time to confirm each game exists and to read its current price, then snapshots that price onto the corresponding `OrderItem`. The Order's total is the sum of its items' snapshotted prices — never re-derived from a live catalog read.
 
 This introduces a runtime dependency — CatalogAPI down means no new orders can be placed. That's accepted, and arguably correct: an order *should* fail rather than be created against a game nobody could verify. The rejected alternative was a local read model fed by `GamePriceChangedEvent`, which removes the coupling but adds a projection to maintain and can price an order from a stale cache.
 
@@ -175,9 +176,11 @@ Note this is a **synchronous read for validation**, which is a different thing f
 
 ## 7. Frontend
 
-**React + Vite**, built to static files and served by nginx in a multi-stage container (Vite build stage → nginx runtime stage). Screens: registration/login, catalog browsing, placing an order, and the user's library.
+**React + Vite**, built to static files and served by nginx in a multi-stage container (Vite build stage → nginx runtime stage). Screens: registration/login, catalog browsing, a `localStorage`-backed cart and checkout confirmation, order status, and the user's library.
 
-The **`Pending` → `Paid` transition must be visible in the UI** — that's what makes the asynchronous architecture legible to someone watching, instead of an implementation detail they have to take on faith. Poll the order (or the library) while it's pending and let the state change on screen.
+Checkout has two entry points — `Add to Cart` then a `/cart` review, or a `Buy Now` shortcut on the catalog — but both land on the same `/checkout` confirmation page before an order is actually placed; neither skips the review step. See [`notes.md`](notes.md) 51.
+
+The **`Pending` → `Paid` transition must be visible in the UI** — that's what makes the asynchronous architecture legible to someone watching, instead of an implementation detail they have to take on faith. This is delivered by subscribing to the order's Server-Sent Events stream ([§4.3](#43-ordersapi)) rather than polling, so the transition appears the moment it happens instead of on the next poll tick. See [`notes.md`](notes.md) 53.
 
 The frontend talks to a **single base URL** and relies on Ingress path routing ([§9.1](#91-ingress-routing)), so it never needs to know that five backend services exist. It obtains a JWT from UsersAPI and sends it as `Authorization: Bearer <token>` on every subsequent call.
 
@@ -208,8 +211,8 @@ Contract rules:
 - Events are the only cross-service communication *for these flows* — no service calls another's HTTP API synchronously as part of them. (The price lookup in [§6](#6-how-orders-learns-the-price) precedes the flow; it isn't part of it.)
 - Event names and payloads are fixed by this spec:
   - `UserCreatedEvent { UserId, Name, Email }`
-  - `OrderPlacedEvent { OrderId, UserId, GameId, Price }`
-  - `PaymentProcessedEvent { OrderId, UserId, GameId, Status }`
+  - `OrderPlacedEvent { OrderId, UserId, GameIds, TotalPrice }`
+  - `PaymentProcessedEvent { OrderId, UserId, Status }`
 - **`OrderId` is the correlation key** across the whole purchase flow. It's the idempotency key for both consumers and the join key for tracing a flow through the logs — which is why it belongs on both events.
 - Queue/exchange names and connection details are non-secret configuration → **ConfigMap**, never hardcoded.
 - Broker credentials are secret → **Secret**.
@@ -270,9 +273,9 @@ The one exception to "local" would be the optional payment webhook ([§5.2](#52-
 - Cloud deployment / managed Kubernetes (see [§11](#11-local-only-scope)).
 - **Refunds, chargebacks, gifting, and key redemption.** Their absence is what makes "library = paid orders" true ([§4.3](#43-ordersapi)); reintroducing any of them means splitting a Library service out.
 - The full auth→capture→settle lifecycle. Outcomes collapse to `Approved`/`Rejected` — a deliberate simplification, appropriate for digital goods where authorization and capture would be immediate anyway.
-- A shopping cart / multi-item order. One order is one game.
+- ~~A shopping cart / multi-item order. One order is one game.~~ — built; see [§4.3](#43-ordersapi) and [`notes.md`](notes.md) 51.
 - Multi-tenancy.
-- Real-time features (websockets/SignalR) beyond what the event flows require internally.
+- Real-time features (websockets/SignalR) beyond what the event flows require internally — the one exception is order/payment status, which the client now consumes via Server-Sent Events rather than polling ([§7](#7-frontend), [`notes.md`](notes.md) 53); that's a status *push* to the client, not a bidirectional channel or an internal service-to-service mechanism, so it doesn't reopen this line.
 
 ## 13. Open decisions
 
@@ -305,7 +308,7 @@ Still open:
 
 ## 14. Acceptance criteria
 
-- [x] Each of the five backend services builds, runs, and passes its own test suite independently. — 109 tests total (users 18, catalog 17, orders 17, payments 52, notifications 5).
+- [x] Each of the five backend services builds, runs, and passes its own test suite independently. — 117 tests total (users 18, catalog 17, orders 25, payments 52, notifications 5).
 - [x] Each backend repo and the frontend repo has its own `Dockerfile` and its own `/k8s` folder at its root.
 - [x] `helm install` of the `orchestration` umbrella chart brings up the full environment (Postgres + RabbitMQ + five services + frontend + Ingress) from a clean cluster in one command. — verified: a fresh `helm uninstall` + PVC delete + `helm install` brought up all **8** pods (5 backends + Postgres + RabbitMQ + frontend) with **zero restarts** (an initContainer per DB-backed service waits for Postgres before migrating, closing a cold-start race — see `notes.md` 25).
 - [x] No Pod exists outside a Deployment anywhere in the system.
@@ -319,7 +322,7 @@ Still open:
 - [x] `POST /api/orders` ignores any client-supplied price; the order is priced from CatalogAPI.
 - [x] `GET /api/library` returns exactly the caller's `Paid` orders — never `Pending` or `Failed` ones.
 - [x] The frontend reaches every service through one base URL; no service-specific port or host appears in its build. — the app calls only relative `/api/*` paths; the Ingress routes each to the right service by path on the same origin the frontend is served from.
-- [x] The `Pending` → `Paid` transition is visible in the UI without a manual refresh. — verified live in Chrome: placed an order, watched the badge flip from `Pending` to `Paid` on its own via the order status page's poll.
+- [x] The `Pending` → `Paid` transition is visible in the UI without a manual refresh. — verified live in Chrome: placed an order, watched the badge flip from `Pending` to `Paid` on its own, pushed over the order status page's Server-Sent Events stream (`notes.md` 53), no poll in the Network tab.
 - [ ] Switching `PaymentGateway:Providers` in the ConfigMap changes the active chain with **no code change and no image rebuild**. — `AbacatePayGateway` and `MercadoPagoGateway` are now both built and unit-tested (HTTP mocked; see `notes.md` 38), and the config-driven chain composition is exercised by `PaymentGatewayChainTests`. Not yet verified live against a running cluster with real credentials — that's the explicit follow-up `notes.md` 38 and `../features/payment-gateway-simulate.md` flag.
 - [x] The simulated gateway returns the same outcome for the same price on every run. — unit tested at the exact `999.00` boundary plus 8 other cases, and confirmed live.
 - [ ] With a real gateway active, a webhook with an invalid or missing signature is rejected and **no** `PaymentProcessedEvent` is published. — `IPaymentWebhookHandler` and the signature checks are built and unit-tested for both providers, but the endpoint is dormant in this local topology (no public Ingress reaches it) — confirmation currently happens via polling instead. See `notes.md` 38.

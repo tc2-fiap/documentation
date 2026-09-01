@@ -110,18 +110,18 @@ Watch `kubectl logs -n fiap-games deploy/notifications-api -f` in another termin
 
 ### Browse the catalog and buy a game
 
-`catalog-api` seeds itself with 8 real games (real Steam cover art, realistic BRL prices) the first time it starts against an empty database, so there's already something to browse without creating anything by hand:
+`catalog-api` seeds itself with 8 real games (real Steam cover art, realistic BRL prices) the first time it starts against an empty database, so there's already something to browse without creating anything by hand. In the browser this goes through a cart and a checkout confirmation step (see [The same flow in a browser](#the-same-flow-in-a-browser) below); against the API directly, one call places the order:
 
 ```bash
 curl -s $BASE/api/games -H "Authorization: Bearer $TOKEN" | jq
 GAME_ID=$(curl -s $BASE/api/games -H "Authorization: Bearer $TOKEN" | jq -r '.items[0].id')
 
-ORDER=$(curl -s -X POST $BASE/api/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"gameId\": \"$GAME_ID\"}")
+ORDER=$(curl -s -X POST $BASE/api/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"gameIds\": [\"$GAME_ID\"]}")
 echo $ORDER | jq
 ORDER_ID=$(echo $ORDER | jq -r '.id')
 ```
 
-Note the request body carries only `gameId` — the price is never sent by the client, only read from `catalog-api` and snapshotted onto the order (`instructions.md` §6). Try the same `POST /api/orders` call again with the same `$GAME_ID` — it now returns `409 Conflict` ("You already own this game or have a pending order for it"), since a user can't own the same game twice (`notes.md` 42); it only unblocks again if that order later settles `Failed`.
+Note the request body carries only `gameIds` — a list, since a single checkout can place one order for several games (a cart, in the browser) — and never a price; each item's price is read from `catalog-api` and snapshotted onto the order (`instructions.md` §6). Try the same `POST /api/orders` call again with the same `$GAME_ID` — it now returns `409 Conflict` ("You already own or have a pending order for: `$GAME_ID`"), since a user can't own the same game twice. That's enforced two ways: an application-level check for a friendly error message, and — the actual, race-proof guarantee — a partial unique index on Postgres itself (`notes.md` 51, 52). Either way it only unblocks again if that order later settles `Failed`.
 
 ### Watch `Pending` become `Paid`
 
@@ -186,9 +186,9 @@ Each is paginated (`page`/`pageSize`, capped at 100) and accepts optional filter
 open http://localhost   # or just navigate there
 ```
 
-Register or log in (a Google sign-in button appears automatically only if `Google:ClientId` is configured — see `notes.md` 28), buy a game, and land on the checkout page: a product line item (cover image, title, genre/platform), the price in both BRL and USD, and — if a real PIX gateway is configured — a QR code to scan. It polls from `Pending` to `Paid`/`Failed` without a manual refresh, exactly like the `$ORDER_ID` poll above. Logging in as the seeded admin surfaces two nav links: the all-orders view (and its per-order detail page, composing the same four order-scoped endpoints above into one screen) and "System Events" — the `/admin/events` page from the curl calls above, with dropdown filters for source, kind, and type plus a date range, and a click-to-expand raw JSON payload on every row.
+Register or log in (a Google sign-in button appears automatically only if `Google:ClientId` is configured — see `notes.md` 28). Add one or more games to your cart from the catalog and review them on `/cart`, or use `Buy Now` on a single game — either way you land on the same `/checkout` confirmation page before anything is actually ordered: an itemized review (cover image, title, genre/platform per game) and the total in both BRL and USD. Confirming lands on the order page: the same line items, an order-and-payment-status box, the total, and — if a real PIX gateway is configured — a QR code to scan. The `Pending` → `Paid`/`Failed` transition appears the moment it happens, pushed over a Server-Sent Events connection rather than polled — unlike the `watch`-based `$ORDER_ID` loop above, which is just a convenient way to observe the same transition from the command line (`notes.md` 53). Logging in as the seeded admin surfaces two nav links: the all-orders view (and its per-order detail page, composing the same four order-scoped endpoints above into one screen) and "System Events" — the `/admin/events` page from the curl calls above, with dropdown filters for source, kind, and type plus a date range, and a click-to-expand raw JSON payload on every row.
 
-The header carries an EN/PT toggle, visible even before logging in. Toggling to Portuguese always shows native BRL (e.g. `R$ 29,99`); toggling to English converts every catalog price to its USD equivalent using the live quotation, falling back to BRL if the rate lookup is ever unavailable — never a blank or broken price. The checkout page always shows both currencies together regardless of the toggle. The language choice itself persists across a reload (`notes.md` 35, 36, 39).
+The header carries an EN/PT toggle, visible even before logging in. Toggling to Portuguese always shows native BRL (e.g. `R$ 29,99`); toggling to English converts every catalog price to its USD equivalent using the live quotation, falling back to BRL if the rate lookup is ever unavailable — never a blank or broken price. The cart, checkout, and order pages always show both currencies together regardless of the toggle. The language choice itself persists across a reload (`notes.md` 35, 36, 39).
 
 ## 6. Tear down
 
@@ -213,4 +213,4 @@ Every backend repo and the frontend also run alone via their own `docker-compose
 | Google button never appears | Expected with no `Google:ClientId` configured — `GET /api/users/config` reports `googleSignInEnabled: false` and the frontend hides it deliberately, rather than showing a button guaranteed to fail |
 | No email arrives despite `EMAIL_PROVIDER=resend` | Check `notifications-api` logs and the `resend-credentials` Secret — a missing/invalid `RESEND_API_KEY` fails the send and is recorded on the `Notification` row itself (visible via the admin notifications endpoint), not silently swallowed |
 | Catalog prices show in BRL even with the toggle set to English | `GET /api/quotations/usd-brl` returned `409` — both Frankfurter and ExchangeRate-API are unreachable (usually a cluster with no outbound internet access); the frontend degrades to native BRL by design rather than showing a broken price, see `catalog-api` logs for which provider failed and why |
-| `POST /api/orders` returns `409` for a game you don't think you own | You (or a prior run through this walkthrough) already have a `Pending` or `Paid` order for that `GameId` — `GET /api/library` and `GET /api/orders/admin` (as admin) show every order across attempts; only a `Failed` order allows a retry (`notes.md` 42) |
+| `POST /api/orders` returns `409` for a game you don't think you own | You (or a prior run through this walkthrough) already have a `Pending` or `Paid` order item for that game — `GET /api/library` and `GET /api/orders/admin` (as admin) show every order across attempts; only a `Failed` order allows a retry (`notes.md` 42, 51, 52) |

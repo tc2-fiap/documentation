@@ -4,7 +4,7 @@
 
 Everything here is a **closed** decision, with the alternative that was rejected and the condition that would reopen it. Decisions still open live in [`instructions.md` §12](instructions.md#12-open-decisions).
 
-Last updated: 2026-08-29
+Last updated: 2026-09-01
 
 ---
 
@@ -632,3 +632,49 @@ It also matches `base-project` exactly, so nothing new has to be built or explai
 **Also fixed in `narrative/DOCUMENTATION.*.md` itself, discovered the same pass.** Its own `## 3. Solution architecture` tree still showed a `repos/` wrapper folder around all eight repos, and its `## 11. CI/CD` section still claimed workflows "still haven't run" because of the `master`/`main` branch mismatch — true when written, stale after entry 48's rename. Both corrected: the tree now shows the seven runtime repos as flat siblings (matching `GETTING_STARTED.md`'s clone step exactly) with `documentation` called out as published separately, and the CI/CD section now states the mismatch was real but has been fixed. The same file's Navigation table linked `frontend/design/` via `../../frontend/design/` — also cross-repo-boundary, also broken for anyone but a from-scratch reconstructed monorepo — now a direct GitHub link to `tc2-fiap/frontend`'s `design/` folder.
 
 **Revisit if:** `documentation` is ever folded back into one of the runtime repos, or the grader's workflow changes to include cloning it — at that point the GitHub-first treatment this entry adds stops being necessary, though it would still work as a redundant courtesy.
+
+---
+
+## 51. Cart and checkout replace one-click buy; `Order` becomes a true multi-item aggregate, reshaping `OrderPlacedEvent`/`PaymentProcessedEvent`
+
+**Decision.** `CatalogPage`'s single "Buy" button — one click, one `POST /api/orders` with a bare `GameId`, straight to `/orders/:id` — is replaced by a real storefront flow: a `localStorage`-backed cart (`Add to Cart` on the catalog, a `/cart` review page), and a `/checkout` confirmation step that both cart checkout and a `Buy Now` shortcut funnel through — `Buy Now` pre-loads checkout with just that one game rather than creating an order directly, so no purchase path skips the review step. Making a cart checkout actually place one order for several games required `Order` to become a real multi-item aggregate: it now holds an `Items` collection (`OrderItem { OrderId, GameId, Price }`, each with its own price snapshot) and a computed `TotalPrice`, instead of a single `GameId`/`Price` pair. `POST /api/orders` takes `GameIds: Guid[]` instead of one `GameId`; `OrderResponse` exposes `Items[]`/`TotalPrice` instead of `GameId`/`Price`.
+
+**Why not batch N single-item orders instead.** The alternative — keep `Order` untouched, have cart checkout fire `POST /api/orders` once per cart item — was considered explicitly and rejected in favor of the real multi-item model: a cart checkout is one purchase decision from the buyer's point of view, and splitting it into N independently-succeeding-or-failing orders would mean a partial checkout (three games ordered, one already-owned conflict) has no single order to point the buyer at, and no single receipt. The cost is the one this entry pays: `OrderPlacedEvent`/`PaymentProcessedEvent` are fixed contracts per `instructions.md` §8, "don't rename or reshape them casually" — this is the one place that rule is deliberately revisited, not an accidental drift.
+
+**Consequence for the event contracts.** `OrderPlacedEvent` becomes `{ OrderId, UserId, GameIds: Guid[], TotalPrice }` (was `{ OrderId, UserId, GameId, Price }`). `PaymentProcessedEvent` becomes `{ OrderId, UserId, Status }` — `GameId` is dropped entirely, not renamed to `GameIds`, because it was never actually read by either consumer: `orders-api`'s `PaymentProcessedConsumer` only ever used `OrderId`/`Status` to drive `MarkPaid`/`MarkFailed`, and `notifications-api`'s confirmation email was already generic ("Enjoy your game!", never naming the title). Both contract files were updated byte-for-byte across `orders-api`, `payments-api`, and `notifications-api` per entry 21's duplication convention. `payments-api`'s `Payment` domain entity also drops its own `GameId` column — a payment already belongs to exactly one `OrderId`, and nothing about charging or displaying it needed a single game id once an order could hold several.
+
+**Consequence for the library.** `GET /api/library` used to return one row per Paid order (which, before this entry, meant one row per purchased game since orders were single-item). With multi-item orders that equivalence breaks, so the endpoint now returns a flattened per-game projection (`LibraryItemResponse { GameId, OrderId, PurchasedAtUtc }`) across all of a user's Paid orders' items, not one row per order.
+
+**Revisit if:** a purchase ever needs per-item quantities greater than one — the duplicate-purchase guard (entry 52) and the whole ownership model assume a game is bought at most once per user, ever, so quantity > 1 would need its own design pass, not just a schema tweak.
+
+---
+
+## 52. `order_items` gets two DB-level unique constraints — duplicate-in-order and duplicate-ownership are now enforced by Postgres, not just application code
+
+**Decision.** Two constraints were added directly on the `order_items` table, on top of (not instead of) the existing application-level checks in `OrderService.CreateAsync`:
+- `UNIQUE (order_id, game_id)` — a given order can never contain the same game twice.
+- `UNIQUE (user_id, game_id) WHERE status <> 'Failed'` — a partial index enforcing that, across *all* of a user's orders, at most one non-Failed `order_item` exists per game. A `Failed` item is excluded from the constraint so a failed purchase never blocks a retry, matching the rule `instructions.md` §10 already states for order-level state.
+
+Both required denormalizing `UserId` and `Status` onto `OrderItem` itself (mirroring `Order.UserId`/`Order.Status`, kept in sync by a new `OrderItem.SyncStatus` call from `Order.MarkPaid`/`MarkFailed`) — a Postgres partial index's predicate can only reference columns on its own table, and the ownership rule is inherently cross-order, so it can't be expressed as a constraint on `Order` alone.
+
+**Why not rely on the existing app-level check alone.** `OrderService.CreateAsync` already rejected a request if `GetConflictingGameIdsAsync` found the user already owned or had a pending order for one of the requested games — but that check-then-insert is a textbook TOCTOU race: two concurrent requests for the same user and game can both pass the check before either commits, and both succeed in creating a conflicting order. A unique index is the only way to make the guarantee atomic — the database itself is the arbiter, not a race-prone read followed by a write. `OrderService.CreateAsync` now also catches the resulting `DbUpdateException`/`PostgresException` (SQLSTATE `23505`, unique-violation) around `SaveChangesAsync` and translates it into the same `Error.Conflict` the pre-check already returns, so the pre-check stays as a fast, friendly first line of defense and the constraint is the actual backstop.
+
+**Verification.** Confirmed against a real Postgres instance (a throwaway container, migration applied, then direct SQL), not just read from the generated migration: inserting a second item with the same `(order_id, game_id)` fails; inserting a second `Pending` item for the same `(user_id, game_id)` from a different order fails; marking the first item `Failed` and retrying the same `(user_id, game_id)` succeeds. The partial index's raw SQL filter had to quote the column as `"Status"` (not `status`) — Npgsql quotes mixed-case identifiers in the generated DDL, so an unquoted lowercase filter predicate silently fails to resolve to the actual column.
+
+**Revisit if:** a purchase is ever allowed to be retried while a prior attempt for the same game is still genuinely `Pending` (rather than only after it resolves to `Paid`/`Failed`) — the current partial index treats any non-`Failed` item as blocking, which is correct today only because `Pending` is expected to resolve quickly (the simulated gateway's few-second delay, or the real-gateway polling path).
+
+---
+
+## 53. Order/payment status delivered via Server-Sent Events, replacing `OrderStatusPage`'s 2-second poll
+
+**Decision.** `OrderStatusPage` used to poll `GET /api/orders/:id` (and, best-effort, `GET /api/payments/checkout/:orderId`) every 2 seconds via a recursive `setTimeout` until the order left `Pending`. It now opens a single `GET /api/orders/{id}/stream` connection: `orders-api` pushes the current status immediately, then one more event when the order transitions to `Paid`/`Failed`, then closes the stream. The PIX-checkout fetch is now a one-shot call (with a short bounded retry, since the `Payment` row is created asynchronously) made once when the order is first observed `Pending`, not repeated on a timer.
+
+**Why not the browser's `EventSource` API.** `EventSource` cannot send an `Authorization` header, and every other endpoint in this system authenticates via a bearer JWT. Putting the token in the stream URL as a query parameter — the usual `EventSource` workaround — was rejected: it leaks the token into server access logs and browser history, a real downgrade from every other request's header-based auth. Instead, the frontend hand-rolls an SSE reader (`src/api/sse.ts`) over `fetch` + `ReadableStream`, sending the same `Authorization: Bearer` header as any other API call and manually parsing `data: ...\n\n` frames.
+
+**How the endpoint is implemented.** A new singleton `IOrderStatusBroadcaster` in `orders-api`, backed by `System.Threading.Channels` (one channel per in-flight `OrderId`), is published to by `PaymentProcessedConsumer` right after it commits an order's `Paid`/`Failed` transition. The `/stream` endpoint uses ASP.NET Core's native Minimal API SSE support (`TypedResults.ServerSentEvents`, built into the `net10.0` target the service already runs — no new package): it emits the order's current status immediately, completing right away if already terminal (covers a page refresh after the order already settled), otherwise waiting on the broadcaster with a 2-minute safety timeout.
+
+**Consequence for the Ingress.** nginx buffers proxied responses by default and applies a 60-second `proxy-read-timeout`/`proxy-send-timeout`, both fatal to a long-lived SSE connection — `repos/orchestration/templates/ingress.yaml` had no annotations at all before this, so both were added (`proxy-buffering: "off"`, `proxy-read-timeout`/`proxy-send-timeout: "120"`). There is one Ingress resource for the whole system, so these apply to every route, not just `orders-api`'s — harmless for the plain request/response routes.
+
+**Why an in-memory broadcaster is acceptable here.** `orders-api`'s Helm values already pin `replicaCount: 1`, so there's no cross-pod fan-out gap: whichever single pod handles the `PaymentProcessedEvent` consumption is the same pod every `/stream` subscriber is connected to.
+
+**Revisit if:** `orders-api` ever needs more than one replica — an in-memory, per-pod broadcaster stops being correct the moment a subscriber can be connected to a different pod than the one that consumes the triggering event; that would need a real backplane (e.g. re-subscribing via a fanout RabbitMQ queue instead of an in-process channel).

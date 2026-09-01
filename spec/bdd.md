@@ -38,23 +38,32 @@ Feature: User registration event flow
 ```gherkin
 Feature: Order creation
   As an authenticated user
-  I want to place an order for a game
+  I want to place an order for one or more games in a single checkout
   So that the purchase flow starts
 
   Scenario: Placing an order prices it from the catalog
     Given I am authenticated
     And game "The Witcher 3" exists in CatalogAPI with price 29.99
-    When I POST /api/orders on OrdersAPI with only that GameId
+    When I POST /api/orders on OrdersAPI with GameIds containing only that game
     Then the response status is 202 Accepted
-    And an Order is persisted with Status "Pending" and Price 29.99
-    And OrdersAPI publishes an OrderPlacedEvent containing OrderId, UserId, GameId, and Price
+    And an Order is persisted with Status "Pending" and one OrderItem priced 29.99
+    And OrdersAPI publishes an OrderPlacedEvent containing OrderId, UserId, GameIds, and TotalPrice
+
+  Scenario: Placing a cart checkout with multiple games in one order
+    Given I am authenticated
+    And game "Hollow Knight" exists in CatalogAPI with price 34.99
+    And game "Elden Ring" exists in CatalogAPI with price 249.90
+    When I POST /api/orders with GameIds containing both games
+    Then the response status is 202 Accepted
+    And a single Order is persisted with Status "Pending", two OrderItems, and TotalPrice 284.89
+    And OrdersAPI publishes one OrderPlacedEvent for that OrderId containing both GameIds and TotalPrice 284.89
 
   Scenario: A client-supplied price is ignored
     Given I am authenticated
     And a game exists in CatalogAPI with price 299.00
-    When I POST /api/orders with that GameId and a body also claiming a price of 0.01
-    Then the created Order has Price 299.00, taken from CatalogAPI
-    And the published OrderPlacedEvent carries 299.00
+    When I POST /api/orders with that game's id and a body also claiming a price of 0.01
+    Then the created Order's OrderItem has Price 299.00, taken from CatalogAPI
+    And the published OrderPlacedEvent carries TotalPrice 299.00
 
   Scenario: Ordering a game that does not exist
     Given I am authenticated
@@ -66,8 +75,23 @@ Feature: Order creation
   Scenario: The order price is a snapshot
     Given I have a Pending order for a game priced at 29.99
     When the game's price is changed to 9.99 in CatalogAPI
-    Then my existing order still has Price 29.99
+    Then my existing order's OrderItem still has Price 29.99
     And the change does not propagate to any existing order
+
+  Scenario: A duplicate game id in the same checkout is rejected
+    Given I am authenticated
+    And game "Hollow Knight" exists in CatalogAPI
+    When I POST /api/orders with GameIds listing that same game twice
+    Then no Order is persisted
+    And this is enforced by a unique index on order_items(order_id, game_id), not only request validation
+
+  Scenario: Ordering a game I already own or have pending is rejected
+    Given I am authenticated
+    And I have a Paid order containing "Elden Ring"
+    When I POST /api/orders with GameIds containing "Elden Ring" again
+    Then the response status is 409 Conflict
+    And no new Order is persisted
+    And a concurrent duplicate request for the same user and game is rejected by a partial unique index on order_items(user_id, game_id) even if both requests pass the initial application-level check
 
   Scenario: Placing an order requires authentication
     When I POST /api/orders without a bearer token
@@ -243,7 +267,7 @@ Feature: Swappable payment gateway chain
 
   Scenario Outline: Simulated outcomes follow the price rule
     Given PaymentGateway:Providers is set to "simulated"
-    When PaymentsAPI processes an OrderPlacedEvent with Price <price>
+    When PaymentsAPI processes an OrderPlacedEvent with TotalPrice <price>
     Then the payment outcome is <status>
     And processing the same order again produces <status> every time, never a random result
 
@@ -320,7 +344,7 @@ Feature: AbacatePay sandbox webhook
     When AbacatePay POSTs a payment-completed webhook with a valid signature
     Then PaymentsAPI verifies the signature before parsing the body
     And PaymentsAPI publishes a PaymentProcessedEvent with Status "Approved" for OrderId "<id>"
-    And the event carries no AbacatePay-specific vocabulary, only OrderId, UserId, GameId, and Status
+    And the event carries no AbacatePay-specific vocabulary, only OrderId, UserId, and Status
     And if PaymentStatusPollingService had already finalized the same Payment first, this webhook is a harmless no-op
 
   Scenario: An unsigned or tampered webhook is rejected
