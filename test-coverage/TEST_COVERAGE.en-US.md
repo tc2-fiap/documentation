@@ -7,9 +7,11 @@ Based on [`base-project/docs/DOCUMENTATION.md` §7.1](https://github.com/KainanG
 ## Measuring it
 
 ```bash
-cd repos/<service>-api/tests/FiapGames.<Service>.Tests
+cd <service>-api/tests/FiapGames.<Service>.Tests
 dotnet test --collect:"XPlat Code Coverage"
 ```
+
+(No `repos/` prefix — that's this workspace's own layout, not the reproducible one. Per `notes.md` 50, `documentation` is the one repo never cloned as a sibling; the seven runtime repos, including `<service>-api`, are cloned flat into one parent directory, per `../getting-started/GETTING_STARTED.en-US.md` §1.)
 
 Each run drops a Cobertura report under that project's `TestResults/`; the numbers below were produced this way, one run per service, on 2026-09-01.
 

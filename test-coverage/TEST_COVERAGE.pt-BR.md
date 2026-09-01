@@ -7,9 +7,11 @@ Baseado em [`base-project/docs/DOCUMENTATION.md` §7.1](https://github.com/Kaina
 ## Como medir
 
 ```bash
-cd repos/<service>-api/tests/FiapGames.<Service>.Tests
+cd <service>-api/tests/FiapGames.<Service>.Tests
 dotnet test --collect:"XPlat Code Coverage"
 ```
+
+(Sem o prefixo `repos/` — esse é o layout deste workspace específico, não o reproduzível. Conforme `notes.md` 50, `documentation` é o único repositório nunca clonado como irmão; os sete repositórios em execução, incluindo `<service>-api`, são clonados lado a lado em um único diretório pai, conforme `../getting-started/GETTING_STARTED.pt-BR.md` §1.)
 
 Cada execução gera um relatório Cobertura em `TestResults/` daquele projeto; os números abaixo foram produzidos assim, uma execução por serviço, em 01/09/2026.
 

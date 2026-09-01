@@ -2,19 +2,13 @@
 
 # FIAP Games
 
-Two things live here: a **finished reference implementation**, and the **distributed system that replaces it** — now built and running.
+A .NET modular monolith, rearchitected into a distributed system: five backend services, a React frontend, and a Helm orchestration chart, running on local Kubernetes with event-driven messaging.
 
-## What's built
+This repo — `documentation` — is the project's specs, decision record, and narrative documentation. It's read on GitHub, not cloned: unlike the seven repos below, it's never checked out as a sibling to run anything, since nothing about running the system needs it on disk (`notes.md` 50).
 
-**`base-project/`** — the original .NET 10 modular monolith (Users + Games, JWT, MongoDB, Docker Compose, CI/CD, Terraform), also mirrored publicly at [`github.com/KainanGuerra/fiap-games`](https://github.com/KainanGuerra/fiap-games). Read-only reference material; not modified. The commands below run the local copy already in this workspace:
+## The distributed system
 
-```bash
-cd base-project
-cp .env.example .env
-docker compose up --build      # API on :8080, Swagger on :8080/swagger
-```
-
-**`repos/`** — the distributed system it was rearchitected into: five .NET backend services, a React + Vite frontend, and an `orchestration` repo holding the Helm umbrella chart. Runs on a local `kind` Kubernetes cluster. Every repo below has its own bilingual `README.md`.
+Seven independent repos under [`github.com/tc2-fiap`](https://github.com/tc2-fiap), each cloned as a flat sibling of the *other six* — never of this repo. Every one has its own bilingual `README.md`.
 
 | Repo | Owns |
 |---|---|
@@ -26,30 +20,37 @@ docker compose up --build      # API on :8080, Swagger on :8080/swagger
 | [`frontend`](https://github.com/tc2-fiap/frontend) | The React app — catalog with cover images, a real checkout step (PIX QR when a real gateway is active), library, an admin section for the cross-service audit trail, and an English/Portuguese language toggle that shows R$ or a live-converted USD price |
 | [`orchestration`](https://github.com/tc2-fiap/orchestration) | The Helm umbrella chart: Postgres, RabbitMQ, Ingress, and every service subchart |
 
+To bring the whole system up on a local Kubernetes cluster, clone the seven repos above into one empty parent directory (keeping their default folder names — `orchestration`'s Helm chart expects the other six as literal sibling paths), then from `orchestration/`:
+
 ```bash
-cd repos/orchestration
+helm dependency update
 helm install fiap-games .
 ```
 
-Brings up all eight pods (five backend services + Postgres + RabbitMQ + frontend) from a clean cluster with zero restarts. The frontend and every backend are reached through one Ingress base URL. See [`GETTING_STARTED.en-US.md`](narrative/GETTING_STARTED.en-US.md) ([pt-BR](narrative/GETTING_STARTED.pt-BR.md)) for prerequisites, the full bring-up sequence, and a demo walkthrough.
+This brings up all eight pods (five backend services + Postgres + RabbitMQ + frontend) from a clean cluster with zero restarts, reachable through one Ingress base URL. See [`GETTING_STARTED.en-US.md`](getting-started/GETTING_STARTED.en-US.md) ([pt-BR](getting-started/GETTING_STARTED.pt-BR.md)) for the full clone step, prerequisites, verification, and a demo walkthrough.
 
 Each service repo also runs standalone via its own `docker-compose.yml` — see that repo's own `README.md`.
 
+## The reference monolith
+
+`base-project` — the original .NET 10 modular monolith (Users + Games, JWT, MongoDB, Docker Compose, CI/CD, Terraform) this system replaces — lives at [`github.com/KainanGuerra/fiap-games`](https://github.com/KainanGuerra/fiap-games), read-only reference material, not modified during this project. See that repo's own [`docs/DOCUMENTATION.md`](https://github.com/KainanGuerra/fiap-games/blob/main/docs/DOCUMENTATION.md) for how it's built, and its `README.md` for how to run it.
+
 ## The design documents
 
-This repo — `repos/documentation/` — holds every spec, decision record, and narrative document for the project (`notes.md` 34, 44):
+This repo holds every spec, decision record, and narrative document for the project (`notes.md` 34, 44, 46, 50, 55):
 
 | Document | Contents | Languages |
 |---|---|---|
 | [`instructions.md`](spec/instructions.md) | The spec — architecture, service responsibilities, event contracts, Kubernetes requirements, acceptance criteria (checked off as they were verified) | English only |
 | [`notes.md`](spec/notes.md) | Decision record — why each choice was made, what was rejected, and what would reopen it | English only |
 | [`bdd.md`](spec/bdd.md) | Gherkin acceptance scenarios covering the event flows, order lifecycle, and deployment shape | English only |
-| [`DOCUMENTATION.en-US.md`](narrative/DOCUMENTATION.en-US.md) / [`.pt-BR`](narrative/DOCUMENTATION.pt-BR.md) | What was actually built — architecture, event-flow diagrams, per-service breakdown | English, Português |
-| [`GETTING_STARTED.en-US.md`](narrative/GETTING_STARTED.en-US.md) / [`.pt-BR`](narrative/GETTING_STARTED.pt-BR.md) | Prerequisites, cluster bring-up, verification, demo walkthrough | English, Português |
-| [`../../CLAUDE.md`](../../CLAUDE.md) | Working context for AI agent sessions | English only |
+| [`OVERVIEW.en-US.md`](context/OVERVIEW.en-US.md) / [`.pt-BR`](context/OVERVIEW.pt-BR.md) | Why this system exists and what it delivers | English, Português |
+| [`ARCHITECTURE.en-US.md`](architecture/ARCHITECTURE.en-US.md) / [`.pt-BR`](architecture/ARCHITECTURE.pt-BR.md) | How it was actually built — solution architecture, event-flow diagrams, per-service breakdown, deployment | English, Português |
+| [`GETTING_STARTED.en-US.md`](getting-started/GETTING_STARTED.en-US.md) / [`.pt-BR`](getting-started/GETTING_STARTED.pt-BR.md) | Prerequisites, cluster bring-up, verification, demo walkthrough | English, Português |
+| [`TEST_COVERAGE.en-US.md`](test-coverage/TEST_COVERAGE.en-US.md) / [`.pt-BR`](test-coverage/TEST_COVERAGE.pt-BR.md) | Measured per-service line coverage | English, Português |
 | [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Brand identity — color tokens, wordmark, logo mark, favicon — applied verbatim in the frontend, kept in the one repo that uses it (`notes.md` 44) | English only |
 
-`instructions.md` is the *what*. `notes.md` is the *why*. `bdd.md` is *how you'd know it works*. `DOCUMENTATION.md` is *what actually got built*. `instructions.md`/`notes.md`/`bdd.md` stay single-language — they're a spec and an append-only decision log written during the build, not reader-facing narrative documentation (`notes.md` 35).
+`instructions.md` is the *what*. `notes.md` is the *why*. `bdd.md` is *how you'd know it works*. `OVERVIEW.md` is *why it exists*, `ARCHITECTURE.md` is *what actually got built*. `instructions.md`/`notes.md`/`bdd.md` stay single-language — they're a spec and an append-only decision log written during the build, not reader-facing narrative documentation (`notes.md` 35).
 
 ### Future features
 
@@ -70,7 +71,7 @@ A few that differ from the obvious reading of the requirements, each argued in `
 - **A swappable payment gateway.** Deterministic simulation by default; an optional real AbacatePay sandbox integration behind a ConfigMap flag remains unbuilt (`notes.md` 4).
 - **An admin audit trail composed at the view layer.** An admin can see every order, its events, its payment record, and its notifications — each service exposing only its own data over its own admin endpoint, never a cross-schema query.
 - **Google sign-in without an OAuth redirect flow.** ID-token verification needs no public callback URL, sidestepping the tunnel problem that keeps the real payment gateway optional.
-- **Documentation lives in its own repo (`repos/documentation/`), not inside any one service repo**, and its narrative layer (this file, `DOCUMENTATION.md`, `GETTING_STARTED.md`, every repo's `README.md`) is bilingual English/Portuguese — the spec and decision record stay English-only (`notes.md` 34, 35, 44).
+- **Documentation lives in its own repo, published separately and never cloned alongside the seven runtime repos** — its narrative layer (this file, `OVERVIEW.md`, `ARCHITECTURE.md`, `GETTING_STARTED.md`, `TEST_COVERAGE.md`, every repo's `README.md`) is bilingual English/Portuguese; the spec and decision record stay English-only (`notes.md` 34, 35, 44, 50).
 
 ## Context
 

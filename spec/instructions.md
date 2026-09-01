@@ -15,7 +15,7 @@ Two companion documents:
 | [`bdd.md`](bdd.md) | Acceptance-level behavior in Gherkin — the same role [`base-project/docs/behavior/behavior.md`](https://github.com/KainanGuerra/fiap-games/blob/main/docs/behavior/behavior.md) plays for the monolith. |
 | [`notes.md`](notes.md) | Decision record: *why* the design is this and not the alternative, including the rejected options and what would reopen each choice. |
 
-This document is the *what*; `notes.md` is the *why*. For what was actually built against this spec, see [`DOCUMENTATION.en-US.md`](../narrative/DOCUMENTATION.en-US.md) ([pt-BR](../narrative/DOCUMENTATION.pt-BR.md)); to run it, see [`GETTING_STARTED.en-US.md`](../narrative/GETTING_STARTED.en-US.md) ([pt-BR](../narrative/GETTING_STARTED.pt-BR.md)).
+This document is the *what*; `notes.md` is the *why*. For what was actually built against this spec, see [`ARCHITECTURE.en-US.md`](../architecture/ARCHITECTURE.en-US.md) ([pt-BR](../architecture/ARCHITECTURE.pt-BR.md)); to run it, see [`GETTING_STARTED.en-US.md`](../getting-started/GETTING_STARTED.en-US.md) ([pt-BR](../getting-started/GETTING_STARTED.pt-BR.md)).
 
 ## 2. What carries over from `base-project`
 

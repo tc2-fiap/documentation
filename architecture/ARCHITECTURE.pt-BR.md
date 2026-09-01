@@ -1,31 +1,10 @@
-[English](DOCUMENTATION.en-US.md) · **Português**
+[English](ARCHITECTURE.en-US.md) · **Português**
 
-# FIAP Games — Documentação do Sistema Distribuído
+# FIAP Games — Arquitetura
 
-## 1. Introdução
+Veja [`../context/OVERVIEW.pt-BR.md`](../context/OVERVIEW.pt-BR.md) para entender por que este sistema existe e o que ele entrega; este documento é o aprofundamento técnico — como ele foi de fato construído.
 
-Este documento descreve o que foi efetivamente construído quando o [`base-project/`](https://github.com/KainanGuerra/fiap-games) — um monólito modular em .NET responsável por Usuários e Jogos — foi rearquitetado como um sistema distribuído: cinco serviços implantáveis de forma independente, um fluxo de compra orientado a eventos, isolamento de dados por serviço e um frontend em React, tudo rodando em um cluster Kubernetes local.
-
-O foco aqui é o mesmo do [`base-project/docs/DOCUMENTATION.md`](https://github.com/KainanGuerra/fiap-games/blob/main/docs/DOCUMENTATION.md): não apenas *o quê* foi construído, mas *como*, e por que tomou essa forma.
-
-### Navegação
-
-| Arquivo | Conteúdo |
-|---|---|
-| [`GETTING_STARTED.pt-BR.md`](GETTING_STARTED.pt-BR.md) | Pré-requisitos, subida do cluster, verificação, um passo a passo de demonstração |
-| [`instructions.md`](../spec/instructions.md) | A especificação — arquitetura, responsabilidades de cada serviço, contratos de eventos, critérios de aceitação (em inglês) |
-| [`notes.md`](../spec/notes.md) | Registro de decisões — 53 entradas, cada uma com a alternativa rejeitada e o que a reabriria (em inglês) |
-| [`bdd.md`](../spec/bdd.md) | Cenários de aceitação em Gherkin — a camada de aceitação do projeto (em inglês) |
-| [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Identidade visual — tokens de cor, marca, logomarca, favicon (aplicados literalmente no frontend) |
-| [`base-project/docs/DOCUMENTATION.md`](https://github.com/KainanGuerra/fiap-games/blob/main/docs/DOCUMENTATION.md) | Como o monólito de referência que este sistema substitui foi construído |
-
-## 2. Por que um sistema distribuído, e como foi construído
-
-O `base-project` já aplicava DDD (contextos delimitados), Clean Architecture e BDD dentro de um único deployável. Este projeto mantém as três práticas, mas muda a *fronteira*: cada contexto delimitado — Usuários, Catálogo, Pedidos, Pagamentos, Notificações — passa a ser seu próprio repositório, schema e deployável, comunicando-se com os demais apenas por eventos (ou, no único caso em que a consistência síncrona realmente importa, por uma chamada HTTP simples).
-
-Essa é uma superfície de falha materialmente maior que a de um monólito: cinco serviços, um message broker, bancos de dados por serviço e manifests Kubernetes, em vez de um único processo e um único banco. A ordem de construção foi escolhida especificamente para gerenciar esse risco — primeiro um **walking skeleton** (o caminho mais estreito possível por toda a infraestrutura — cluster, Helm, Ingress, Postgres, RabbitMQ, logging estruturado — comprovado apenas com `users-api` e `notifications-api`), depois amplitude (completando os serviços mais simples, provando a confiança JWT entre serviços), depois o núcleo real do projeto (o fluxo de compra), depois o endurecimento contra os critérios de aceitação, depois funcionalidades que surgiram mais tarde (RBAC de admin e a trilha de auditoria entre serviços), depois o frontend, nessa ordem. Integrar tudo apenas depois que cada serviço estivesse "completo" foi tratado como o principal risco a evitar — ver a tabela de riscos do `notes.md`.
-
-## 3. Arquitetura da solução
+## 1. Arquitetura da solução
 
 ```
 users-api/            # cadastro, login, login com Google, emissão de JWT, papéis
@@ -68,21 +47,21 @@ flowchart LR
 
 Toda seta em direção ao Postgres usa um role restrito a exatamente um schema — uma consulta entre schemas é recusada pelo próprio Postgres, verificado ao vivo ao tentar uma com as credenciais de outro serviço (`instructions.md` §14).
 
-## 4. Modelo de domínio
+## 2. Modelo de domínio
 
 | Serviço | Agregado/entidade | Campos principais |
 |---|---|---|
 | `users-api` | `User` | Id, Name, Email (único), PasswordHash (anulável — nulo para contas somente-Google), GoogleSubjectId, Role (`Player`/`Admin`) |
 | `users-api` | `UserEvent` | Id, UserId, EventType, Payload (JSON bruto), OccurredAtUtc — o log de auditoria de eventos de todo o sistema (`notes.md` 43) |
-| `catalog-api` | `Game` | Id, Title, Genre, Platform, Description, Price, ReleaseDate, CoverImageUrl (anulável — só exibição, ver §7.3) |
+| `catalog-api` | `Game` | Id, Title, Genre, Platform, Description, Price, ReleaseDate, CoverImageUrl (anulável — só exibição, ver §5.3) |
 | `orders-api` | `Order` | Id, UserId, Status (`Pending → Paid \| Failed`, unidirecional), CreatedAtUtc, UpdatedAtUtc — um checkout de carrinho registra um único `Order` para vários jogos, então preço e identidade por jogo vivem em `OrderItem`, não aqui (`notes.md` 51) |
 | `orders-api` | `OrderItem` | Id, OrderId, GameId, Price (**snapshot**, nunca ao vivo); UserId e Status são cópias desnormalizadas do `Order` pai, mantidas em sincronia por `Order.MarkPaid`/`MarkFailed` — necessárias só para viabilizar as duas restrições de banco abaixo; `Order.Status` continua sendo a fonte única da verdade (`notes.md` 51, 52); RemovedFromLibraryAtUtc (opcional, unidirecional) marca o item como removido da biblioteca — um campo independente de `Status`, que nunca reverte o pedido (`notes.md` 54) |
 | `orders-api` | `OrderEvent` | Id, OrderId, EventType, Payload (JSON bruto), OccurredAtUtc — o log de auditoria por pedido |
-| `payments-api` | `Payment` | Id, OrderId (único), UserId, Price, Status (`Processing`/`Approved`/`Rejected` — só interno, nunca trafega entre serviços), Gateway, ExternalReference, RequestPayload, ResponsePayload, PixCopyPasteCode, PixQrCodeBase64 (ambos anuláveis — só gateways PIX reais, ver §7.3), NextPollAtUtc, PollAttempts |
+| `payments-api` | `Payment` | Id, OrderId (único), UserId, Price, Status (`Processing`/`Approved`/`Rejected` — só interno, nunca trafega entre serviços), Gateway, ExternalReference, RequestPayload, ResponsePayload, PixCopyPasteCode, PixQrCodeBase64 (ambos anuláveis — só gateways PIX reais, ver §5.3), NextPollAtUtc, PollAttempts |
 | `notifications-api` | `Notification` | Id, DedupeKey (único), Type, UserId, OrderId (anulável), Recipient, Subject, Body, Channel, Status, ProviderRequestPayload, ProviderResponsePayload |
-| `notifications-api` | `UserProjection` | UserId (chave), Name, Email — um read-model local, não uma leitura entre serviços (ver §7) |
+| `notifications-api` | `UserProjection` | UserId (chave), Name, Email — um read-model local, não uma leitura entre serviços (ver §5) |
 
-## 5. Stack tecnológico
+## 3. Stack tecnológico
 
 - **.NET 10**, ASP.NET Core Minimal APIs.
 - **PostgreSQL** via EF Core/Npgsql — uma instância, um schema e um role por serviço (`notes.md` 13, 14).
@@ -97,17 +76,17 @@ Toda seta em direção ao Postgres usa um role restrito a exatamente um schema �
 - **kind** — o cluster Kubernetes local (`notes.md`, conforme o pré-requisito de ambiente do plano).
 - **Docker Compose** — cada repositório de serviço também roda de forma independente, sem o cluster (`notes.md` 24).
 
-## 6. Persistência
+## 4. Persistência
 
 Diferente do MongoDB sem schema do `base-project` (apenas migrações de índice), este sistema usa **migrações relacionais comuns do EF Core** por serviço, com a tabela `__EFMigrationsHistory` de cada serviço vivendo dentro do seu próprio schema. As migrações rodam automaticamente na inicialização do container (`db.Database.Migrate()`), protegidas por um init container `wait-for-postgres` em todo serviço com banco — sem ele, uma subida verdadeiramente fria do cluster entra em corrida com o Postgres e o processo do serviço quebra antes que o Postgres esteja pronto para aceitar conexões (`notes.md` 25).
 
-O `orders-api` também carrega as tabelas do **outbox transacional do MassTransit com EF Core** (`InboxState`, `OutboxMessage`, `OutboxState`) no seu próprio schema — o mecanismo que torna atômicos a escrita do pedido e o `OrderPlacedEvent` (§7).
+O `orders-api` também carrega as tabelas do **outbox transacional do MassTransit com EF Core** (`InboxState`, `OutboxMessage`, `OutboxState`) no seu próprio schema — o mecanismo que torna atômicos a escrita do pedido e o `OrderPlacedEvent` (§5).
 
-## 7. Comunicação orientada a eventos
+## 5. Comunicação orientada a eventos
 
 Dois fluxos, ambos contratos fixos entre serviços (`instructions.md` §8) — renomear ou remodelar qualquer um deles casualmente quebra cinco serviços de uma vez. O contrato do fluxo de compra *foi* deliberadamente remodelado uma vez, para suportar pedidos com múltiplos itens — a única exceção documentada a essa regra, não um desvio casual (`notes.md` 51).
 
-### 7.1 Cadastro
+### 5.1 Cadastro
 
 ```mermaid
 sequenceDiagram
@@ -127,7 +106,7 @@ sequenceDiagram
     end
 ```
 
-### 7.2 Compra
+### 5.2 Compra
 
 ```mermaid
 sequenceDiagram
@@ -162,7 +141,7 @@ A leitura síncrona de preço (§ Orders → Catalog) é uma consulta que aconte
 
 **Quando um gateway real está configurado** (`PaymentGateway:Providers` inclui `abacatepay` e/ou `mercadopago`), o passo `P->>P: IPaymentGateway.ChargeAsync` acima passa a resolver via `PaymentGatewayChain` e pode retornar `Processing` em vez de um resultado final — o `payments-api` ainda persiste a linha `Payment`, mas **não** publica `PaymentProcessedEvent` ainda. Um `PaymentStatusPollingService` em background então consulta o provedor real com backoff exponencial até resolver (ou expirar em um `Rejected` forçado), publicando só então. O `Order` permanece `Pending` o tempo todo do ponto de vista do `orders-api` — nenhum contrato de evento mudou. Veja `notes.md` 38 para o design completo, incluindo por que o polling substitui o receptor de webhook, que está construído mas atualmente inativo.
 
-### 7.3 Exibição da cotação, o checkout e o status ao vivo (adições síncronas/HTTP, sem eventos novos)
+### 5.3 Exibição da cotação, o checkout e o status ao vivo (adições síncronas/HTTP, sem eventos novos)
 
 Quatro adições posteriores, puramente síncronas/HTTP, convivem com os fluxos acima sem mudar nenhum dos dois contratos de evento do broker (`notes.md` 39, 40, 53, 54):
 
@@ -171,7 +150,7 @@ Quatro adições posteriores, puramente síncronas/HTTP, convivem com os fluxos 
 - **`GET /api/orders/{id}/stream`** (`orders-api`, Server-Sent Events) entrega a transição `Pending → Paid | Failed` para a página de status do pedido no frontend sem polling: envia o status atual do pedido imediatamente, depois mais uma atualização no momento em que o pedido sai de `Pending`, e então encerra. Sustentado por um novo singleton `IOrderStatusBroadcaster` (um canal `System.Threading.Channels` por `OrderId` em andamento), alimentado pelo `PaymentProcessedConsumer` logo depois que ele confirma uma transição para `Paid`/`Failed` — implementado com o suporte nativo do ASP.NET Core a SSE em Minimal APIs (`TypedResults.ServerSentEvents`, já disponível no target `net10.0` do serviço, sem pacote novo). O frontend não pode usar a API `EventSource` do navegador aqui, já que ela não consegue enviar um cabeçalho `Authorization` e colocar o JWT na URL vazaria para logs do servidor e para o histórico do navegador — em vez disso, um leitor feito à mão (`src/api/sse.ts`) envia a requisição via `fetch` com o mesmo cabeçalho de bearer de qualquer outra chamada e interpreta sozinho os frames `text/event-stream`. Isso só é seguro como mecanismo em memória, por pod, porque o `orders-api` roda em uma única réplica; escalá-lo horizontalmente exigiria um backplane de verdade (por exemplo, uma fila do RabbitMQ em modo fanout) em vez disso. O Ingress (`repos/orchestration/templates/ingress.yaml`) precisou de `nginx.ingress.kubernetes.io/proxy-buffering: "off"` e de `proxy-read-timeout`/`proxy-send-timeout` maiores (`"120"`, acima do padrão de 60s do nginx) — ambos fatais para uma conexão de longa duração, e antes ausentes já que o Ingress não tinha nenhuma anotação. Veja `notes.md` 53.
 - **`DELETE /api/library/{gameId}`** (`orders-api`, confirmado no frontend por um modal) remove um jogo da biblioteca do usuário. Define `OrderItem.RemovedFromLibraryAtUtc` — um campo totalmente separado de `Order.Status`/`OrderItem.Status`, então o pedido subjacente continua `Paid` no registro e nenhum `Payment` é alterado; é uma decisão de visibilidade da biblioteca, não um reembolso. O mesmo campo é excluído do índice único parcial `order_items(user_id, game_id)` (`notes.md` 52), então remover um jogo libera imediatamente uma recompra a preço cheio. Veja `notes.md` 54.
 
-## 8. RBAC e a trilha de auditoria entre serviços
+## 6. RBAC e a trilha de auditoria entre serviços
 
 Adicionado depois do fluxo de compra principal (`notes.md` 26–30, 32), quando surgiu o requisito de que um admin precisa ver, para qualquer pedido, seu ciclo de vida completo nos três serviços que o tocam — não apenas um resumo.
 
@@ -201,14 +180,14 @@ flowchart TB
 
 Só o `users-api` precisou de uma tabela nova (`UserEvent`) — era o único serviço sem nenhum registro de que o `UserCreatedEvent` havia sido publicado. `orders-api`, `payments-api` e `notifications-api` já tinham uma tabela com tudo o que era necessário (`OrderEvent`, `Payment` e `Notification`, respectivamente); cada um só ganhou uma nova consulta paginada e sem escopo por pedido sobre dados que já persistia. O `catalog-api` está ausente dos dois diagramas — ele não publica nem consome nada.
 
-## 9. Qualidade: testes, tratamento de erros e observabilidade
+## 7. Qualidade: testes, tratamento de erros e observabilidade
 
-- **122 testes de backend** distribuídos entre cinco serviços (users 18, catalog 17, orders 30, payments 52, notifications 5), todos na camada de serviço com repositório mockado — nenhum Postgres ou RabbitMQ ao vivo em nenhuma suíte. A fatia do `orders-api` cresceu com a migração para pedidos com múltiplos itens: cobertura para registrar um pedido com vários jogos, o caminho de rejeição do pedido inteiro por qualquer conflito, o comportamento do `OrderStatusBroadcaster` por trás do endpoint de SSE (`notes.md` 51, 53), e a remoção definitiva de `RemoveFromLibrary` mais seu caminho na camada de serviço `OrderService.RemoveFromLibraryAsync` (`notes.md` 54). A regra determinística de preço do `payments-api` é testada exatamente no limite de `999.00`; o mapeamento de vocabulário do `AbacatePayGateway`/`MercadoPagoGateway` e a extração dos campos do QR code PIX, o comportamento de fallback do `PaymentGatewayChain`, a lógica de backoff/timeout do `PaymentStatusPollingWorker` e o fallback/cache do `QuotationService` do `catalog-api` também têm cobertura (HTTP mockado via um `HttpMessageHandler` falso, nenhuma chamada real ao sandbox — veja `notes.md` 38, 39).
+- **Suítes de teste de backend** — todas na camada de serviço com repositório mockado, nenhum Postgres ou RabbitMQ ao vivo em nenhuma suíte. A fatia do `orders-api` cresceu com a migração para pedidos com múltiplos itens: cobertura para registrar um pedido com vários jogos, o caminho de rejeição do pedido inteiro por qualquer conflito, o comportamento do `OrderStatusBroadcaster` por trás do endpoint de SSE (`notes.md` 51, 53), e a remoção definitiva de `RemoveFromLibrary` mais seu caminho na camada de serviço `OrderService.RemoveFromLibraryAsync` (`notes.md` 54). A regra determinística de preço do `payments-api` é testada exatamente no limite de `999.00`; o mapeamento de vocabulário do `AbacatePayGateway`/`MercadoPagoGateway` e a extração dos campos do QR code PIX, o comportamento de fallback do `PaymentGatewayChain`, a lógica de backoff/timeout do `PaymentStatusPollingWorker` e o fallback/cache do `QuotationService` do `catalog-api` também têm cobertura (HTTP mockado via um `HttpMessageHandler` falso, nenhuma chamada real ao sandbox — veja `notes.md` 38, 39). Veja [`../test-coverage/TEST_COVERAGE.pt-BR.md`](../test-coverage/TEST_COVERAGE.pt-BR.md) para a contagem real de testes e a cobertura de linhas medida por serviço — mantida em um único lugar em vez de repetida (e potencialmente desatualizada) aqui também.
 - **Tratamento global de exceções**: um `GlobalExceptionHandler` idêntico (copiado por serviço) captura qualquer coisa não tratada, registra tudo no lado do servidor e retorna um `ProblemDetails` genérico com um trace id — nunca um stack trace para o cliente.
 - **Logging estruturado**: cada serviço emite uma linha de log JSON por requisição (Serilog + `CompactJsonFormatter`), e toda publicação/consumo registra `{OrderId}` (ou `{UserId}` no cadastro) como propriedade nomeada — confirmado ao vivo que um único `OrderId` rastreia uma compra pelos logs de `orders-api`, `payments-api` e `notifications-api`.
 - **Padrão Result**: toda falha esperada (não encontrado, conflito, não autorizado, validação) é um `Result`/`Result<T>`, mapeado para um status HTTP pela extensão compartilhada `ToHttpResult()` — nunca uma exceção para um caso que o chamador deveria razoavelmente esperar.
 
-## 10. Implantação
+## 8. Implantação
 
 - **Helm**: um subchart por repositório (`Chart.yaml`, `values.yaml`, `templates/`), `orchestration` como o chart guarda-chuva dependendo de todos os seis (`notes.md` 20).
 - **kind**: o cluster local, configurado com `extraPortMappings` e o label de nó `ingress-ready` para que o nginx-ingress possa se ligar diretamente às portas 80/443 do host.
@@ -226,25 +205,4 @@ Só o `users-api` precisou de uma tabela nova (`UserEvent`) — era o único ser
 - **Anotações do Ingress**: o único recurso Ingress não tinha nenhuma até o endpoint de SSE precisar delas — `nginx.ingress.kubernetes.io/proxy-buffering: "off"` e `proxy-read-timeout`/`proxy-send-timeout: "120"`, já que o buffering e o timeout padrão de 60s do nginx quebrariam uma conexão de longa duração em `/api/orders/{id}/stream`. Elas se aplicam a todo o sistema (um único Ingress para todas as rotas), mas são inofensivas para o tráfego comum de requisição/resposta (`notes.md` 53).
 - **Auditoria de secrets**: `helm template | grep -iE "password\|secret\|apikey"` só expõe valores literais dentro dos próprios recursos `Secret` — toda env var de `Deployment` que referencia um deles usa `secretKeyRef`, confirmado em todos os seis charts.
 - **Dois ambientes de execução** (`notes.md` 24): todo repositório de backend também carrega seu próprio `docker-compose.yml`, subindo apenas aquele serviço mais a infraestrutura que ele sozinho precisa, tornando-o desenvolvível de forma independente, sem o cluster.
-
-## 11. CI/CD
-
-Cada um dos seis repositórios carrega seu próprio `.github/workflows/ci.yml`, adaptado do formato de dois jobs do [`base-project/.github/workflows/ci-cd.yml`](https://github.com/KainanGuerra/fiap-games/blob/main/.github/workflows/ci-cd.yml): `build-and-test` (restore/build/test para os repositórios .NET, install/lint/build para o frontend) roda em todo push e PR; `docker-build-and-push` roda apenas em push para `main`, depois que o primeiro job passa, publicando no GHCR. Nenhum deles rodou durante a construção em si — a raiz deste workspace nunca foi inicializada com `git init` durante essa fase, deliberadamente. Desde então, todos os sete repositórios em execução foram publicados individualmente no GitHub sob uma organização dedicada, `tc2-fiap` (`notes.md` 47). Cada um veio inicialmente com o branch padrão `master` (padrão local do `git init`), enquanto esse gatilho é restrito ao `main` — então o CI nunca disparou silenciosamente em nenhum deles; o branch padrão de cada repositório foi renomeado para `main` logo depois, especificamente para corrigir isso (`notes.md` 48), e o CI agora roda a cada push. O `documentation` (este repositório) foi publicado mais tarde ainda, direto em `main`, mas não carrega workflow de CI próprio (`notes.md` 49).
-
-## 12. Entregáveis
-
-- Cinco serviços de backend implantáveis e testáveis de forma independente, e um frontend React, cada um com seu próprio Dockerfile, subchart Helm e `docker-compose.yml` independente.
-- Um fluxo de compra orientado a eventos abrangendo três serviços com outbox transacional, verificado para os dois resultados (`Approved`/`Rejected`) e para reentrega idempotente.
-- Isolamento de schema do Postgres por serviço, garantido por concessões de role e verificado ao vivo por uma consulta entre schemas recusada.
-- Um papel de admin com trilha de auditoria entre serviços composta a partir de quatro endpoints independentes, e login com Google e envio real de e-mail opcionais, ambos degradando graciosamente para "desligado" quando não configurados.
-- Subida do cluster em um único comando (`helm install`) verificada com zero reinícios a partir de um estado genuinamente limpo.
-- Uma especificação escrita (`instructions.md`), um registro de decisões com 53 entradas (`notes.md`) e cenários de aceitação em Gherkin (`bdd.md`).
-- Documentação narrativa bilíngue (inglês/português) — este documento, o `GETTING_STARTED.md` e o `README.md` de cada repositório — e uma alternância de idioma inglês/pt-BR no próprio frontend; todo preço continua sendo um `decimal` em BRL de ponta a ponta, exibido em R$ ou convertido para um valor em USD só de exibição, dependendo da alternância (`notes.md` 35, 36, 39).
-- Um passo de checkout real com resumo do produto, preço em duas moedas e um QR code/código copia-e-cola PIX quando um gateway real está ativo — além de uma trava contra compra duplicada, para que um jogo já possuído ou em andamento não possa ser comprado de novo (`notes.md` 40, 42).
-- Uma segunda visão de admin, `/admin/events`, listando e filtrando todo evento/mensagem entre os cinco serviços — não restrita a um pedido — composta a partir de quatro endpoints de admin "listar tudo", da mesma forma que a trilha de auditoria por pedido (`notes.md` 43).
-- Um carrinho em `localStorage` e uma página de confirmação `/checkout` pelas quais passam tanto o checkout do carrinho quanto o atalho `Comprar agora` do catálogo — nenhum caminho de compra pula a etapa de revisão — sustentados por `Order` ter se tornado um agregado real com múltiplos itens, com as regras de jogo duplicado no mesmo pedido e de posse duplicada agora reforçadas por índices únicos reais do Postgres em `order_items`, não apenas por verificações da aplicação (`notes.md` 51, 52).
-- Status de pedido/pagamento ao vivo via Server-Sent Events (`GET /api/orders/{id}/stream`) em vez do cliente fazer polling a cada dois segundos (`notes.md` 53).
-
-## 13. Conclusão
-
-As mesmas três práticas que moldaram o `base-project` — DDD, Clean Architecture, BDD — permaneceram inalteradas; o que mudou foi a unidade à qual foram aplicadas, de um módulo dentro de um único processo para cinco serviços implantáveis de forma independente, confiando uns nos outros apenas por meio de eventos e de um segredo JWT compartilhado. A ordem de construção em walking skeleton, o outbox transacional e o isolamento de schema do Postgres por serviço foram as três decisões que tornaram essa separação sustentável, e não apenas aspiracional — cada uma verificada ao vivo contra o sistema em execução, não apenas afirmada em um documento.
+- **CI/CD**: cada um dos seis repositórios carrega seu próprio `.github/workflows/ci.yml`, adaptado do formato de dois jobs do [`base-project/.github/workflows/ci-cd.yml`](https://github.com/KainanGuerra/fiap-games/blob/main/.github/workflows/ci-cd.yml): `build-and-test` (restore/build/test para os repositórios .NET, install/lint/build para o frontend) roda em todo push e PR; `docker-build-and-push` roda apenas em push para `main`, depois que o primeiro job passa, publicando no GHCR. Nenhum deles rodou durante a construção em si — a raiz deste workspace nunca foi inicializada com `git init` durante essa fase, deliberadamente. Desde então, todos os sete repositórios em execução foram publicados individualmente no GitHub sob uma organização dedicada, `tc2-fiap` (`notes.md` 47). Cada um veio inicialmente com o branch padrão `master` (padrão local do `git init`), enquanto esse gatilho é restrito ao `main` — então o CI nunca disparou silenciosamente em nenhum deles; o branch padrão de cada repositório foi renomeado para `main` logo depois, especificamente para corrigir isso (`notes.md` 48), e o CI agora roda a cada push. O `documentation` (este repositório) foi publicado mais tarde ainda, direto em `main`, mas não carrega workflow de CI próprio (`notes.md` 49).

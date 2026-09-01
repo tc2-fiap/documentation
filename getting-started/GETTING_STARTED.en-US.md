@@ -4,7 +4,7 @@
 
 Bring the whole distributed system up on a local Kubernetes cluster, verify it's healthy, and walk through a full purchase — including the admin audit trail — from the command line.
 
-For what you're looking at architecturally, see [`DOCUMENTATION.en-US.md`](DOCUMENTATION.en-US.md). For why it's shaped this way, see [`notes.md`](../spec/notes.md).
+For what you're looking at architecturally, see [`ARCHITECTURE.en-US.md`](../architecture/ARCHITECTURE.en-US.md). For why it's shaped this way, see [`notes.md`](../spec/notes.md).
 
 ## Prerequisites
 

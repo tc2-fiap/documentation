@@ -4,7 +4,7 @@
 
 Suba todo o sistema distribuído em um cluster Kubernetes local, verifique se está saudável e percorra uma compra completa — incluindo a trilha de auditoria de admin — pela linha de comando.
 
-Para entender a arquitetura, veja [`DOCUMENTATION.pt-BR.md`](DOCUMENTATION.pt-BR.md). Para entender por que ela tem essa forma, veja [`notes.md`](../spec/notes.md) (em inglês).
+Para entender a arquitetura, veja [`ARCHITECTURE.pt-BR.md`](../architecture/ARCHITECTURE.pt-BR.md). Para entender por que ela tem essa forma, veja [`notes.md`](../spec/notes.md) (em inglês).
 
 ## Pré-requisitos
 
