@@ -15,7 +15,7 @@ O foco aqui é o mesmo do [`base-project/docs/DOCUMENTATION.md`](https://github.
 | [`ARCHITECTURE.pt-BR.md`](../architecture/ARCHITECTURE.pt-BR.md) | Como foi construído — arquitetura da solução, modelo de domínio, fluxos de eventos, RBAC, implantação |
 | [`GETTING_STARTED.pt-BR.md`](../getting-started/GETTING_STARTED.pt-BR.md) | Pré-requisitos, subida do cluster, verificação, um passo a passo de demonstração |
 | [`instructions.md`](../spec/instructions.md) | A especificação — arquitetura, responsabilidades de cada serviço, contratos de eventos, critérios de aceitação (em inglês) |
-| [`notes.md`](../spec/notes.md) | Registro de decisões — 56 entradas, cada uma com a alternativa rejeitada e o que a reabriria (em inglês) |
+| [`notes.md`](../spec/notes.md) | Registro de decisões — 57 entradas, cada uma com a alternativa rejeitada e o que a reabriria (em inglês) |
 | [`bdd.md`](../spec/bdd.md) | Cenários de aceitação em Gherkin — a camada de aceitação do projeto (em inglês) |
 | [`TEST_COVERAGE.pt-BR.md`](../test-coverage/TEST_COVERAGE.pt-BR.md) | Cobertura de linhas medida, por serviço |
 | [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Identidade visual — tokens de cor, marca, logomarca, favicon (aplicados literalmente no frontend) |
@@ -34,7 +34,7 @@ Essa é uma superfície de falha materialmente maior que a de um monólito: cinc
 - Isolamento de schema do Postgres por serviço, garantido por concessões de role e verificado ao vivo por uma consulta entre schemas recusada.
 - Um papel de admin com trilha de auditoria entre serviços composta a partir de quatro endpoints independentes, e login com Google e envio real de e-mail opcionais, ambos degradando graciosamente para "desligado" quando não configurados.
 - Subida do cluster em um único comando (`helm install`) verificada com zero reinícios a partir de um estado genuinamente limpo.
-- Uma especificação escrita (`instructions.md`), um registro de decisões com 56 entradas (`notes.md`) e cenários de aceitação em Gherkin (`bdd.md`).
+- Uma especificação escrita (`instructions.md`), um registro de decisões com 57 entradas (`notes.md`) e cenários de aceitação em Gherkin (`bdd.md`).
 - Documentação narrativa bilíngue (inglês/português) — esta visão geral, `ARCHITECTURE.md`, `GETTING_STARTED.md`, `TEST_COVERAGE.md` e o `README.md` de cada repositório — e uma alternância de idioma inglês/pt-BR no próprio frontend; todo preço continua sendo um `decimal` em BRL de ponta a ponta, exibido em R$ ou convertido para um valor em USD só de exibição, dependendo da alternância (`notes.md` 35, 36, 39).
 - Um passo de checkout real com resumo do produto, preço em duas moedas e um QR code/código copia-e-cola PIX quando um gateway real está ativo — além de uma trava contra compra duplicada, para que um jogo já possuído ou em andamento não possa ser comprado de novo (`notes.md` 40, 42).
 - Uma segunda visão de admin, `/admin/events`, listando e filtrando todo evento/mensagem entre os cinco serviços — não restrita a um pedido — composta a partir de quatro endpoints de admin "listar tudo", da mesma forma que a trilha de auditoria por pedido (`notes.md` 43).

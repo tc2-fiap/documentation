@@ -52,14 +52,14 @@ This repo holds every spec, decision record, and narrative document for the proj
 
 `instructions.md` is the *what*. `notes.md` is the *why*. `bdd.md` is *how you'd know it works*. `OVERVIEW.md` is *why it exists*, `ARCHITECTURE.md` is *what actually got built*. `instructions.md`/`notes.md`/`bdd.md` stay single-language — they're a spec and an append-only decision log written during the build, not reader-facing narrative documentation (`notes.md` 35).
 
-### Future features
+### Feature build notes
 
-[`features/`](features/) holds specs for work that hasn't been built yet — each file states its own "not implemented" status up front. English only; these aren't documentation of the delivered system (`notes.md` 37).
+[`features/`](features/) started as specs for work that hadn't been built yet (`notes.md` 37) — both have since been implemented, with their status banners updated in place rather than left stale. They're kept as build notes and provider-API reference (routes, status-vocabulary mapping, what's verified live vs. still pending) rather than folded into `ARCHITECTURE.md`, since its reader doesn't need raw third-party request/response shapes. English only.
 
-| Document | What it specs |
+| Document | Status |
 |---|---|
-| [`features/payment-gateway-simulate.md`](features/payment-gateway-simulate.md) | A real AbacatePay/Mercado Pago sandbox payment gateway, behind the existing `IPaymentGateway` interface |
-| [`features/quotation-feature.md`](features/quotation-feature.md) | An optional USD-equivalent price display alongside R$, informational only |
+| [`features/quotation-feature.md`](features/quotation-feature.md) | **Implemented** (`notes.md` 39) — `GET /api/quotations/usd-brl` in `catalog-api`, Frankfurter with an ExchangeRate-API fallback, display-only |
+| [`features/payment-gateway-simulate.md`](features/payment-gateway-simulate.md) | **Implemented, live sandbox verification pending** (`notes.md` 38) — `AbacatePayGateway`/`MercadoPagoGateway` behind an ordered `PaymentGatewayChain`. Two confirmation paths exist: an exponential-backoff polling `BackgroundService`, the active one in this local topology (no public Ingress for a provider to call back to); and a webhook receiver (`POST /api/payments/webhooks/{provider}`, HMAC-verified) that's fully built and wired for a real deployment, just dormant here. All gateway HTTP calls are mocked in tests — nothing has called a real provider yet. |
 
 ## Notable design choices
 
@@ -68,7 +68,7 @@ A few that differ from the obvious reading of the requirements, each argued in `
 - **A dedicated OrdersAPI.** The original brief put purchase initiation in the catalog; a catalog is product reference data, an order is a transactional aggregate. They're separated here, deliberately.
 - **PostgreSQL, not MongoDB.** A change from the reference project, driven by needing real transactions for a transactional outbox.
 - **One database, one schema and role per service.** Boundaries enforced by Postgres grants rather than developer discipline — verified live, not just asserted.
-- **A swappable payment gateway.** Deterministic simulation by default; an optional real AbacatePay sandbox integration behind a ConfigMap flag remains unbuilt (`notes.md` 4).
+- **A swappable payment gateway.** Deterministic simulation by default (`notes.md` 4); `AbacatePayGateway` and `MercadoPagoGateway` are now built too, composed into an ordered fallback chain behind the `PaymentGateway:Providers` ConfigMap value — live sandbox verification against a real provider account is the one thing still pending (`notes.md` 38).
 - **An admin audit trail composed at the view layer.** An admin can see every order, its events, its payment record, and its notifications — each service exposing only its own data over its own admin endpoint, never a cross-schema query.
 - **Google sign-in without an OAuth redirect flow.** ID-token verification needs no public callback URL, sidestepping the tunnel problem that keeps the real payment gateway optional.
 - **Documentation lives in its own repo, published separately and never cloned alongside the seven runtime repos** — its narrative layer (this file, `OVERVIEW.md`, `ARCHITECTURE.md`, `GETTING_STARTED.md`, `TEST_COVERAGE.md`, every repo's `README.md`) is bilingual English/Portuguese; the spec and decision record stay English-only (`notes.md` 34, 35, 44, 50).

@@ -52,14 +52,14 @@ Este repositório reúne toda especificação, registro de decisões e documenta
 
 `instructions.md` é *o quê*. `notes.md` é *o porquê*. `bdd.md` é *como você saberia que funciona*. `OVERVIEW.md` é *por que existe*, `ARCHITECTURE.md` é *o que de fato foi construído*. `instructions.md`/`notes.md`/`bdd.md` permanecem em um único idioma — são uma especificação e um log de engenharia somente-acréscimo escritos durante a construção, não documentação narrativa voltada ao leitor (`notes.md` 35).
 
-### Funcionalidades futuras
+### Notas de construção de funcionalidades
 
-[`features/`](features/) reúne especificações de trabalho ainda não construído — cada arquivo declara seu próprio status "não implementado" logo no início. Somente inglês; não são documentação do sistema entregue (`notes.md` 37).
+[`features/`](features/) começou como especificações de trabalho ainda não construído (`notes.md` 37) — ambas já foram implementadas, com seus banners de status atualizados no próprio arquivo em vez de deixados desatualizados. Ficam guardadas como notas de construção e referência de API de terceiros (rotas, mapeamento de vocabulário de status, o que já foi verificado ao vivo e o que ainda está pendente), em vez de incorporadas ao `ARCHITECTURE.md`, já que quem lê esse documento não precisa dos formatos brutos de request/response de terceiros. Somente inglês.
 
-| Documento | O que especifica |
+| Documento | Status |
 |---|---|
-| [`features/payment-gateway-simulate.md`](features/payment-gateway-simulate.md) | Um gateway de pagamento sandbox real AbacatePay/Mercado Pago, atrás da interface `IPaymentGateway` já existente |
-| [`features/quotation-feature.md`](features/quotation-feature.md) | Uma exibição opcional de preço equivalente em USD ao lado do R$, somente informativa |
+| [`features/quotation-feature.md`](features/quotation-feature.md) | **Implementado** (`notes.md` 39) — `GET /api/quotations/usd-brl` no `catalog-api`, Frankfurter com fallback para ExchangeRate-API, somente para exibição |
+| [`features/payment-gateway-simulate.md`](features/payment-gateway-simulate.md) | **Implementado, verificação em sandbox real pendente** (`notes.md` 38) — `AbacatePayGateway`/`MercadoPagoGateway` atrás de um `PaymentGatewayChain` ordenado. Existem dois caminhos de confirmação: um `BackgroundService` de polling com backoff exponencial, o caminho ativo nesta topologia local (sem Ingress público para um provedor chamar de volta); e um receptor de webhook (`POST /api/payments/webhooks/{provider}`, verificado por HMAC) totalmente construído e conectado para uma implantação real, apenas inativo aqui. Todas as chamadas HTTP dos gateways são mockadas nos testes — nada chamou um provedor real ainda. |
 
 ## Escolhas de design notáveis
 
@@ -68,7 +68,7 @@ Algumas que divergem da leitura óbvia dos requisitos, cada uma justificada em `
 - **Um OrdersAPI dedicado.** O briefing original colocava o início da compra no catálogo; um catálogo é dado de referência de produto, um pedido é um agregado transacional. Eles são separados aqui, deliberadamente.
 - **PostgreSQL, não MongoDB.** Uma mudança em relação ao projeto de referência, motivada pela necessidade de transações reais para um outbox transacional.
 - **Um banco de dados, um schema e um role por serviço.** Fronteiras impostas por concessões do Postgres, não por disciplina do desenvolvedor — verificado ao vivo, não apenas afirmado.
-- **Um gateway de pagamento substituível.** Simulação determinística por padrão; uma integração sandbox real opcional com o AbacatePay atrás de uma flag de ConfigMap permanece não construída (`notes.md` 4).
+- **Um gateway de pagamento substituível.** Simulação determinística por padrão (`notes.md` 4); `AbacatePayGateway` e `MercadoPagoGateway` também já foram construídos, compostos em uma cadeia de fallback ordenada atrás do valor de ConfigMap `PaymentGateway:Providers` — a verificação em sandbox real contra uma conta de provedor de verdade é a única coisa ainda pendente (`notes.md` 38).
 - **Uma trilha de auditoria de admin composta na camada de visualização.** Um admin pode ver todo pedido, seus eventos, seu registro de pagamento e suas notificações — cada serviço expondo apenas seu próprio dado através do seu próprio endpoint de admin, nunca uma consulta entre schemas.
 - **Login com Google sem um fluxo de redirecionamento OAuth.** A verificação de ID token não precisa de uma URL pública de callback, contornando o mesmo problema de túnel que mantém o gateway de pagamento real como opcional.
 - **A documentação vive em seu próprio repositório, publicado separadamente e nunca clonado junto com os sete repositórios de execução** — sua camada narrativa (este arquivo, `OVERVIEW.md`, `ARCHITECTURE.md`, `GETTING_STARTED.md`, `TEST_COVERAGE.md`, o `README.md` de cada repositório) é bilíngue inglês/português; a especificação e o registro de decisões permanecem somente em inglês (`notes.md` 34, 35, 44, 50).
