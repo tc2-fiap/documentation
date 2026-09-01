@@ -83,11 +83,12 @@ Owns the purchase lifecycle and, by extension, each user's library. Owns the `Or
 
 - Exposes the purchase entry point (`POST /api/orders`, taking `GameIds: Guid[]`), which validates and prices each requested game against CatalogAPI, persists the order as `Pending`, and publishes `OrderPlacedEvent`.
 - Consumes `PaymentProcessedEvent` and transitions the order (and each of its items) to `Paid` or `Failed`.
-- Exposes the user's library (`GET /api/library`) as a flattened, per-game projection over the items of that user's `Paid` orders — one row per purchased game, not one row per order.
+- Exposes the user's library (`GET /api/library`) as a flattened, per-game projection over the items of that user's `Paid` orders that haven't been removed from the library — one row per purchased, still-in-library game, not one row per order.
 - Exposes live order status (`GET /api/orders/{id}/stream`, Server-Sent Events) instead of requiring the client to poll — pushes the current status immediately and one more update when the order leaves `Pending`. See [`notes.md`](notes.md) 53.
+- Lets a user remove a game from their library (`DELETE /api/library/{gameId}`, confirmed client-side via a modal): sets `OrderItem.RemovedFromLibraryAtUtc`, which excludes the item from the library projection **and** frees the game up for repurchase — without ever touching `Order.Status` or reversing the original charge. See [`notes.md`](notes.md) 54.
 - Appends an `OrderEvent` audit row (the actual event payload, not a summary) whenever it publishes `OrderPlacedEvent` or receives `PaymentProcessedEvent`. Admin-only: `GET /api/orders/admin` (every user's orders) and `GET /api/orders/{id}/events` (that order's audit trail). See [`notes.md`](notes.md) 30.
 
-**Why the library lives here**: with refunds, gifting, and key redemption out of scope ([§12](#12-out-of-scope)), "your library" is exactly "the games in your paid orders" — a projection, not an independent aggregate. Splitting a separate Library/Entitlements service would add a repo, a schema, and a chart for a distinction this project never exercises. If refunds ever come into scope, that equivalence breaks and Library should split out.
+**Why the library lives here**: with refunds, gifting, and key redemption out of scope ([§12](#12-out-of-scope)), "your library" is exactly "the games in your paid, not-removed orders" — a projection, not an independent aggregate. Splitting a separate Library/Entitlements service would add a repo, a schema, and a chart for a distinction this project never exercises. Removing a game from the library is not a refund — no `Payment` changes, the charge stays captured — so it doesn't reopen this. If real refunds ever come into scope, the projection equivalence breaks and Library should split out.
 
 **Why the price is a snapshot**: the order stores the price it was placed at, never a live reference to CatalogAPI's current price. A later sale or price change must not retroactively alter an existing order. This is the aggregate boundary doing real work.
 
@@ -308,7 +309,7 @@ Still open:
 
 ## 14. Acceptance criteria
 
-- [x] Each of the five backend services builds, runs, and passes its own test suite independently. — 117 tests total (users 18, catalog 17, orders 25, payments 52, notifications 5).
+- [x] Each of the five backend services builds, runs, and passes its own test suite independently. — 122 tests total (users 18, catalog 17, orders 30, payments 52, notifications 5).
 - [x] Each backend repo and the frontend repo has its own `Dockerfile` and its own `/k8s` folder at its root.
 - [x] `helm install` of the `orchestration` umbrella chart brings up the full environment (Postgres + RabbitMQ + five services + frontend + Ingress) from a clean cluster in one command. — verified: a fresh `helm uninstall` + PVC delete + `helm install` brought up all **8** pods (5 backends + Postgres + RabbitMQ + frontend) with **zero restarts** (an initContainer per DB-backed service waits for Postgres before migrating, closing a cold-start race — see `notes.md` 25).
 - [x] No Pod exists outside a Deployment anywhere in the system.
@@ -320,7 +321,8 @@ Still open:
 - [x] OrdersAPI's order write and its `OrderPlacedEvent` are atomic: killing the process between them leaves neither an order without its event nor an event without its order. — verified by scaling RabbitMQ to zero, placing an order (the write succeeded, the event sat durably in the outbox table), then scaling RabbitMQ back up and confirming the relay delivered it and the cascade completed — with no `orders-api` restart. A crash before the transaction commits is covered by ordinary Postgres ACID semantics (nothing to persist to fail).
 - [x] An order's `Price` is fixed at creation — changing a game's price in CatalogAPI afterwards does not alter any existing order.
 - [x] `POST /api/orders` ignores any client-supplied price; the order is priced from CatalogAPI.
-- [x] `GET /api/library` returns exactly the caller's `Paid` orders — never `Pending` or `Failed` ones.
+- [x] `GET /api/library` returns exactly the caller's `Paid`, not-removed order items — never `Pending`, `Failed`, or library-removed ones.
+- [x] `DELETE /api/library/{gameId}` removes a game from the caller's library and immediately allows repurchasing it — verified live: the game disappears from `/library`, `POST /api/orders` for the same `gameId` then succeeds instead of `409`, and the original `Paid` order is untouched (`notes.md` 54).
 - [x] The frontend reaches every service through one base URL; no service-specific port or host appears in its build. — the app calls only relative `/api/*` paths; the Ingress routes each to the right service by path on the same origin the frontend is served from.
 - [x] The `Pending` → `Paid` transition is visible in the UI without a manual refresh. — verified live in Chrome: placed an order, watched the badge flip from `Pending` to `Paid` on its own, pushed over the order status page's Server-Sent Events stream (`notes.md` 53), no poll in the Network tab.
 - [ ] Switching `PaymentGateway:Providers` in the ConfigMap changes the active chain with **no code change and no image rebuild**. — `AbacatePayGateway` and `MercadoPagoGateway` are now both built and unit-tested (HTTP mocked; see `notes.md` 38), and the config-driven chain composition is exercised by `PaymentGatewayChainTests`. Not yet verified live against a running cluster with real credentials — that's the explicit follow-up `notes.md` 38 and `../features/payment-gateway-simulate.md` flag.

@@ -257,6 +257,33 @@ Feature: Order state transitions
     And the event is acknowledged without crashing the consumer
 ```
 
+## Feature: Remove a game from the library
+
+```gherkin
+Feature: Remove a game from the library
+  As a player
+  I want to remove a game from my library
+  So that I can repurchase it later without a stale entitlement blocking me
+
+  Scenario: Removing an owned game frees it up for repurchase
+    Given I own a game via a Paid order
+    When I DELETE /api/library/{gameId} and confirm
+    Then the game no longer appears in a subsequent GET /api/library
+    And a subsequent POST /api/orders for that same gameId succeeds instead of returning 409
+    And the original order's Status remains "Paid"
+
+  Scenario: Removal is not a refund
+    Given I own a game via a Paid order
+    When I DELETE /api/library/{gameId}
+    Then the order's Status stays "Paid"
+    And no Payment record is modified
+
+  Scenario: A game not owned cannot be removed
+    Given I do not own the requested game
+    When I DELETE /api/library/{gameId}
+    Then the request returns 404
+```
+
 ## Feature: Payment gateway selection
 
 ```gherkin

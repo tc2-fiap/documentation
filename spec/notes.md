@@ -678,3 +678,19 @@ Both required denormalizing `UserId` and `Status` onto `OrderItem` itself (mirro
 **Why an in-memory broadcaster is acceptable here.** `orders-api`'s Helm values already pin `replicaCount: 1`, so there's no cross-pod fan-out gap: whichever single pod handles the `PaymentProcessedEvent` consumption is the same pod every `/stream` subscriber is connected to.
 
 **Revisit if:** `orders-api` ever needs more than one replica — an in-memory, per-pod broadcaster stops being correct the moment a subscriber can be connected to a different pod than the one that consumes the triggering event; that would need a real backplane (e.g. re-subscribing via a fanout RabbitMQ queue instead of an in-process channel).
+
+---
+
+## 54. "Remove from library" frees a game up for repurchase, without ever touching `Order.Status`
+
+**Decision.** A user can remove a game from their library (`DELETE /api/library/{gameId}`, confirmed via a modal on the frontend). `OrderItem` gains a `RemovedFromLibraryAtUtc` (nullable, one-way — once set, stays set) that is entirely separate from `Order.Status`/`OrderItem.Status`: removal never marks the order `Failed` or otherwise reverses it, so the underlying `Paid` order stays on record for audit exactly as `instructions.md` §10's "order state moves one way only" rule already requires. It's excluded from `GetLibraryItemsByUserIdAsync` (so a removed game stops showing in the library) and from `GetConflictingGameIdsAsync` and the `order_items(user_id, game_id)` partial unique index (entry 52) — so the same user can immediately buy that game again at full price.
+
+**Why this exact scope, and why it isn't a refund.** This was flagged as exactly the condition entry 42 (`HasActiveOrderAsync`, since renamed `GetConflictingGameIdsAsync`) named in its own "Revisit if": *"this system ever needs a real 'remove from library'/refund flow."* Two designs were considered:
+- **Hide only** — a cosmetic flag that removes the game from the library view but leaves the ownership constraint blocking repurchase (closer to Steam's "hide," fully reversible).
+- **Real removal** — chosen. The game disappears from the library *and* frees up for repurchase, at the cost of a changed partial-index predicate.
+
+The user explicitly chose real removal. No money moves and no `Payment` record changes — the original charge stays captured and on the books; this is strictly a library-membership decision, not a refund. `instructions.md` §12's "Refunds, chargebacks, gifting, and key redemption" stays out of scope: none of those are what this does. If a genuine refund flow is ever built (money actually reversed), it should reuse `RemovedFromLibraryAtUtc` for the library-visibility side and add its own `Payment`-side reversal — the two are orthogonal.
+
+**Verification.** Confirmed against a real Postgres instance (throwaway container, migration applied, then direct SQL): a second, `Pending` `order_item` for a `(user_id, game_id)` that's still owned (not removed) still fails the unique-violation exactly as entry 52 describes; after marking the owned item's `RemovedFromLibraryAtUtc`, the same insert succeeds. Also verified live end-to-end in the browser against the kind cluster: removing a game via the confirmation modal makes it disappear from `/library` and immediately re-offers `Add to Cart`/`Buy Now` for it on `/catalog`, while other still-owned games stay locked.
+
+**Revisit if:** a real refund flow (actual payment reversal) is ever built — at that point, decide whether refunding should also set `RemovedFromLibraryAtUtc` automatically (so a refunded game leaves the library the same way a manually-removed one does) or stay a fully separate flag.
