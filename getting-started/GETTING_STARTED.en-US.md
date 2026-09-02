@@ -13,6 +13,7 @@ For what you're looking at architecturally, see [`ARCHITECTURE.en-US.md`](../arc
 - **kubectl**
 - **Helm** (v3)
 - **jq** and **curl** — used in the walkthrough below to keep tokens out of your shell history in plain sight; not required by the system itself.
+- **Host ports 80 and 443 free** — step 2 maps them straight through to the ingress controller; if either is already bound (another local server, a leftover `kind` cluster, etc.), the mapping is silently unpublished and everything reached through `http://localhost` fails with no clear error. Check first: `lsof -i :80` / `lsof -i :443` (or `ss -ltn | grep -E ':80|:443'`) — both should print nothing.
 
 Only needed if you also want to run a single service standalone instead of the whole cluster: **.NET 10 SDK**, **Node 22+**, **Docker Compose** (see that repo's own `README.md`).
 

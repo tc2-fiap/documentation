@@ -13,6 +13,7 @@ Para entender a arquitetura, veja [`ARCHITECTURE.pt-BR.md`](../architecture/ARCH
 - **kubectl**
 - **Helm** (v3)
 - **jq** e **curl** — usados no passo a passo abaixo para manter tokens fora do seu histórico do shell de forma visível; não são exigidos pelo sistema em si.
+- **Portas 80 e 443 livres no host** — o passo 2 as mapeia diretamente para o ingress controller; se alguma já estiver ocupada (outro servidor local, um cluster `kind` anterior ainda de pé, etc.), o mapeamento fica silenciosamente sem efeito e tudo que passa por `http://localhost` falha sem erro claro. Verifique antes: `lsof -i :80` / `lsof -i :443` (ou `ss -ltn | grep -E ':80|:443'`) — ambos devem retornar vazio.
 
 Necessário apenas se você também quiser rodar um único serviço de forma independente, sem o cluster inteiro: **.NET 10 SDK**, **Node 22+**, **Docker Compose** (veja o próprio `README.md` daquele repositório).
 
