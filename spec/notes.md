@@ -845,3 +845,15 @@ Nothing else about entry 60 changes — same four links (Catalog, Library, Admin
 **Admin Order Detail resolves item titles and the buyer's name, and a real bug got fixed for free.** `AdminOrderDetailPage` used to find its order via `ordersApi.adminAllOrders().then(items => items.find(...))` — that call defaults to `pageSize: 10`, so any order beyond the 10 most recent was silently never found. Switching to `ordersApi.adminAllOrders({ orderId, pageSize: 1 })` reuses the existing `orderId` filter (entry 60) instead of scanning only the first page, fixing the bug as a side effect of adding what was actually asked for: item titles (resolved via `catalogApi.get` per item, same shape `OrderStatusPage` already uses) and the buyer's name (`usersApi.getById`, same fallback-to-raw-id-on-error pattern `AdminOrdersPage` already uses).
 
 **Revisit if:** Admin Order Detail's per-item `catalogApi.get` calls ever need to scale past a handful of items per order — at that point a single `catalogApi.search({ ... })` batch fetch (Library's pattern) would cut the request count.
+
+---
+
+## 64. Every data-fetching page shows a layout-matching skeleton instead of a "Loading…" line
+
+**Decision.** The seven pages with a real initial-fetch loading state (Catalog, Library, My Orders, Admin/Orders, Admin/Events, Admin/Order Detail, Order Status) replaced their `<p className="muted">{t('x.loading')}</p>` fallback with shimmering placeholders shaped like the real content, via a new shared `src/components/Skeleton.tsx`: `Skeleton` (the base block), `SkeletonGameCard` (mirrors `.game-card`'s cover/title/meta/price/button shape exactly — same `aspect-ratio: 16/9` cover as the real `.game-card-cover`, so nothing shifts when real content arrives), `SkeletonTableRows` (returns just `<tbody>` rows — the real, already-known `<thead>` labels keep rendering, only the data cells shimmer), and `SkeletonCard` (a generic stack of placeholder lines, for the block/detail layouts on Admin/Order Detail and Order Status).
+
+Each page's own title (`<h1 className="page-title">`, icon + translated text) keeps rendering for real during the loading state — it's static and cheap, no reason to placeholder it. `aria-busy="true"` plus the existing `t('x.loading')` string as an `aria-label` on the skeleton container preserves the same information a screen reader got from the old plain-text line.
+
+**Why a pulse, not a moving shimmer gradient.** `.skeleton`'s animation is a plain opacity pulse (`@keyframes skeleton-pulse { 0%,100% {opacity:1} 50% {opacity:.5} }`) on a `var(--color-surface-raised)` block — the simplest option that automatically looks correct in all three themes (dark/mixed/light, entries 60/62) with no extra gradient tokens to define and keep in sync.
+
+**Revisit if:** a page's real layout changes enough that its skeleton visibly mismatches (e.g., a table gains/loses a column) — the skeleton's row/column counts are hardcoded per page-call-site, not derived from the real `<thead>`, so they need updating alongside it.
