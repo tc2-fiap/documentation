@@ -52,6 +52,12 @@ RabbitMQ (like every message broker before it, going back to 1990s tools like IB
 
 `orchestration/Chart.yaml` declares each service's `/k8s` folder as a subchart dependency (`file://../catalog-api/k8s`, and so on), composing five independently-versioned charts into one deployable release. This is Helm's own long-documented **umbrella chart** pattern, in use since the Helm v2 era (community docs on chart dependencies date to ~2016) for exactly this reason: let each component version and template itself independently, then let one parent chart declare "these, together, are the release" — a monorepo's root workspace file, for Kubernetes manifests instead of npm packages.
 
+## 13. `containerPort: 8080` everywhere isn't a project convention — it's a 1980s Unix security boundary
+
+Every service's Dockerfile runs as a non-root `USER app` and listens on `8080` (`ASPNETCORE_URLS=http://+:8080`), while the only thing bound to port `80` on the host is the ingress controller. Ports below 1024 are Unix's **privileged range** — binding one has required root (or, on modern Linux, the `CAP_NET_BIND_SERVICE` capability) since 4.2BSD, in the early 1980s, decades before containers existed. Running application containers as non-root is a deliberate least-privilege choice, and `8080` — the conventional "http-alt" port — is simply the unprivileged number every service falls back to as a result; it isn't coordinated with the Ingress's own port 80 at all, it's just the one number every service happens to share because they all hit the same OS-level wall. The Ingress itself gets to bind 80 because its container legitimately needs root (or the capability) to answer on the well-known port — which is also why only *it*, and nothing else in the cluster, does.
+
+The broader shape here — one gateway fronting the well-known port, every backend behind it on an arbitrary high port — is the **reverse proxy** pattern, older than Kubernetes Ingress by decades (nginx and Apache were doing exactly this in the 1990s, and the underlying idea — one address the outside world reaches, requests dispatched behind it — is older still). "Ingress" is just Kubernetes' name for a reverse proxy that understands Kubernetes Services.
+
 ## Glossary
 
 - **ACID** — Atomicity, Consistency, Isolation, Durability: the four guarantees a single database transaction makes; a Saga exists specifically because a cross-service business transaction can't get all four for free.
@@ -65,6 +71,8 @@ RabbitMQ (like every message broker before it, going back to 1990s tools like IB
 - **IETF / RFC** — the Internet Engineering Task Force and its numbered standards documents (Request for Comments) — the process that produced JWT, OAuth 2.0, and WebSocket as open, vendor-neutral standards.
 - **Orchestration (in this context)** — coordinating a multi-service process via a central coordinator that explicitly tells each participant what to do next.
 - **Partial index** — a database index that only covers rows matching a `WHERE` condition, letting a constraint apply to a subset of a table instead of all of it.
+- **Privileged port** — a TCP/UDP port below 1024; binding one has required root (or a specific OS capability) since early Unix, a convention still enforced by every modern OS.
+- **Reverse proxy** — a server that sits in front of one or more backend servers, forwarding client requests to them; Kubernetes' Ingress is a reverse proxy that understands Kubernetes Services.
 - **Saga** — a business transaction spanning multiple services, implemented as a sequence of local transactions with (optionally) a compensating step for each.
 - **SSE (Server-Sent Events)** — a one-way, HTTP-based push mechanism from server to browser (`text/event-stream`), older than WebSocket as a browser standard.
 - **Transactional Outbox** — writing an outgoing message to a table inside the same database transaction as the business change it describes, so a separate relay can publish it reliably afterward.
