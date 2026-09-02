@@ -15,7 +15,7 @@ The focus here is the same as [`base-project/docs/DOCUMENTATION.md`](https://git
 | [`ARCHITECTURE.en-US.md`](../architecture/ARCHITECTURE.en-US.md) | How it's built — solution architecture, domain model, event flows, RBAC, deployment |
 | [`GETTING_STARTED.en-US.md`](../getting-started/GETTING_STARTED.en-US.md) | Prerequisites, cluster bring-up, verification, a demo walkthrough |
 | [`instructions.md`](../spec/instructions.md) | The spec — architecture, service responsibilities, event contracts, acceptance criteria |
-| [`notes.md`](../spec/notes.md) | Decision record — 57 entries, each with the rejected alternative and what would reopen it |
+| [`notes.md`](../spec/notes.md) | Decision record — one entry per closed decision, each with the rejected alternative and what would reopen it |
 | [`bdd.md`](../spec/bdd.md) | Gherkin acceptance scenarios — the project's acceptance layer |
 | [`TEST_COVERAGE.en-US.md`](../test-coverage/TEST_COVERAGE.en-US.md) | Measured per-service line coverage |
 | [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Brand identity — color tokens, wordmark, logo mark, favicon (applied verbatim in the frontend) |
@@ -34,7 +34,7 @@ That's a materially larger failure surface than a monolith: five services, a mes
 - Per-service Postgres schema isolation, enforced by role grants and verified live by a refused cross-schema query.
 - An admin role with a cross-service audit trail composed from four independent endpoints, and optional Google sign-in and real email delivery, both gracefully degrading to "off" when unconfigured.
 - A single-command cluster bring-up (`helm install`) verified with zero restarts from a genuinely clean state.
-- A written specification (`instructions.md`), a 57-entry decision record (`notes.md`), and Gherkin acceptance scenarios (`bdd.md`).
+- A written specification (`instructions.md`), an append-only decision record (`notes.md`), and Gherkin acceptance scenarios (`bdd.md`).
 - Bilingual (English/Portuguese) narrative documentation — this overview, `ARCHITECTURE.md`, `GETTING_STARTED.md`, `TEST_COVERAGE.md`, and every repo's `README.md` — and an English/pt-BR language toggle in the frontend itself; every price is still a BRL `decimal` end-to-end, shown as R$ or converted to a display-only USD figure depending on the toggle (`notes.md` 35, 36, 39).
 - A real checkout step with a product summary, a dual-currency price, and a PIX QR code/copy-paste code when a real gateway is active — plus a duplicate-purchase guard so a game already owned or in flight can't be bought twice (`notes.md` 40, 42).
 - A second admin view, `/admin/events`, listing and filtering every event/message across all five services — not scoped to one order — composed from four admin "list all" endpoints the same way the per-order audit trail is (`notes.md` 43).

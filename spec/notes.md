@@ -869,3 +869,15 @@ Each page's own title (`<h1 className="page-title">`, icon + translated text) ke
 **Why Portuguese-only, not English, and no `.en-US`/`.pt-BR` split.** The diagrams were previously translated per language (e.g. `Browser`/`Navegador`, `one base URL`/`uma única URL base`) — keeping that parity properly would mean 10 files (5 diagrams × 2 languages) instead of 5, and two copies of every diagram's structure to hand-keep in sync if a flow ever changes. Given a choice between English-only and Portuguese-only for the single shared copy, Portuguese-only was chosen — `ARCHITECTURE.en-US.md` now links out to a Portuguese-labeled diagram, noted inline where it does.
 
 **Revisit if:** a diagram's underlying flow changes — it only needs updating in its one file in `diagrams/` now, not in two inline copies across both `ARCHITECTURE.*.md` files, which was the whole point. If diagram content needs to fork by language again, this entry's "10 files" alternative is what reopens.
+
+---
+
+## 66. `notes.md`'s total entry count is never stated as a literal number anywhere else in the docs
+
+**Decision.** Five places across the workspace stated `notes.md`'s total entry count as a hardcoded number — `CLAUDE.md`'s documentation table, and `OVERVIEW.en-US.md`/`.pt-BR.md` twice each (their own documentation table, and the "Deliverables" bullet list). All five said "57," discovered stale: the actual count was 65 by the time anyone checked (`grep -rn "entries)\|entradas\|[0-9]\+-entry" --include="*.md"` across every repo plus `CLAUDE.md` found exactly these five, and no others — every other `notes.md N` mention in the workspace cites one specific entry, e.g. `notes.md 51`, which is a permanent identifier and doesn't drift). All five now describe the record without a number: "one entry per closed decision" / "an append-only decision record," in both languages.
+
+**Why reword instead of just correcting `57` to `65`.** `notes.md` is append-only and gains entries essentially every session — a corrected number is exactly as stale as the old one the moment the *next* entry lands, on a document that by design never stops growing. Fixing the number is treating a symptom; the actual fix is removing the category of fact that can drift, not refreshing its current value. This has already happened once before, unnoticed, going from whatever the count was when these lines were first written up to 57 — nothing caught that drift either.
+
+**The convention going forward** (added to `CLAUDE.md`'s Conventions section): don't state `notes.md`'s total entry count as a literal number in prose anywhere. Citing one specific entry by number is fine and expected; stating how many entries exist in total is the thing to avoid.
+
+**Revisit if:** a genuine need arises to convey the record's size to a reader without opening the file — at that point a qualitative phrase ("dozens of entries," "a long-running decision log") is the fix, not a literal count that needs a human to notice and update it every time an entry is appended.
