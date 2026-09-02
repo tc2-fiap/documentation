@@ -1,0 +1,70 @@
+[English](DISCOVERIES.en-US.md) · **Português**
+
+# Descobertas
+
+Notas sobre conceitos que surgiram durante a construção deste sistema distribuído e que valem a pena registrar — coisas que, no processo de explicar o "porquê" de uma decisão arquitetural (ver [`notes.md`](../spec/notes.md), em inglês), acabaram se revelando ideias mais antigas e mais consolidadas do que pareciam à primeira vista. Escrito no mesmo espírito de `base-project/docs/discovers/discover.md`, mas com base nas decisões deste sistema (Postgres, Kubernetes, RabbitMQ/MassTransit, cinco serviços independentes), e não nas do monolito de referência (MongoDB, Terraform, Azure).
+
+## 1. O "Transactional Outbox" é um padrão de mensageria dos anos 2000, não um recurso do MassTransit
+
+`OrderService.CreateAsync` publica o `OrderPlacedEvent` e insere a linha do `Order` dentro da mesma unidade de trabalho, contando com o outbox do MassTransit sobre EF Core para garantir que os dois sejam confirmados juntos ou nenhum dos dois seja (`notes.md` 15). Isso não é uma invenção do MassTransit — é o padrão **Transactional Outbox**, descrito pela primeira vez como solução nomeada para o clássico problema da "escrita dupla" (um serviço não consegue atualizar seu próprio banco de dados *e* publicar uma mensagem em um broker separado de forma atômica, sem uma transação distribuída) no livro *Enterprise Integration Patterns* (Hohpe & Woolf, 2003) — anos antes do RabbitMQ 1.0 ou de qualquer biblioteca de mensageria atual do .NET existir. A implementação do MassTransit é só uma versão bem executada de uma ideia antiga: gravar a mensagem de saída em uma tabela dentro da *mesma* transação de banco de dados da mudança de negócio, para que um processo separado a retransmita de forma confiável depois — a atomicidade é garantida pela própria transação do banco, não pelo broker.
+
+## 2. "Consumidor idempotente" pega emprestada uma palavra da matemática com 150 anos, não um termo específico de mensageria
+
+Todo consumidor de evento aqui é idempotente, com a chave em `OrderId` ou `UserId` (`instructions.md` §10). O padrão em si — **Idempotent Receiver** — está catalogado no mesmo livro *Enterprise Integration Patterns* citado acima, mas a palavra "idempotente" é anterior à computação: o matemático Benjamin Peirce a cunhou em 1870 (*Linear Associative Algebra*) para uma operação em que aplicá-la duas vezes dá o mesmo resultado que aplicá-la uma vez (`f(f(x)) = f(x)`). Um consumidor que reprocessa um `PaymentProcessedEvent` reentregue e termina exatamente no mesmo estado como se tivesse processado apenas uma vez é essa mesma ideia do século XIX, aplicada a uma reentrega do RabbitMQ em vez de uma operação algébrica.
+
+## 3. `Result`/`Result<T>` é um nome mais simpático para algo que linguagens funcionais têm há décadas
+
+Este projeto retorna `Result`/`Result<T>` para falhas esperadas (não encontrado, validação, conflito) e reserva exceções para falhas genuínas (regras rígidas). Essa separação — um tipo de retorno que pode ser "ok" ou "um problema esperado", em vez de lançar uma exceção — é o que linguagens funcionais chamam de mônada `Either`, presente em ML e Haskell muito antes do .NET existir. O nome mais chamativo pelo qual a maioria conhece essa ideia, **Railway Oriented Programming**, foi cunhado por Scott Wlaschin para a comunidade F# por volta de 2013 — em si só uma metáfora (dois trilhos paralelos, sucesso e falha, que nunca se cruzam) para a ideia bem mais antiga do `Either`, hoje popular o suficiente para aparecer em uma minimal API em C# sem que ninguém chame isso de "programação funcional".
+
+## 4. Clean Architecture é Hexagonal Architecture com um nome novo, que é o DIP com um diagrama
+
+Todo serviço aqui segue `Domain → Application → Infrastructure`, com as dependências apontando para dentro e `Endpoints` na camada mais externa (regras rígidas). Robert C. Martin batizou isso de **Clean Architecture** em um post de blog de 2012 (depois um livro, em 2017), mas a regra em si — camadas externas e voláteis (frameworks, bancos de dados, HTTP) dependem de camadas internas e estáveis (regras de negócio), nunca o contrário — é a **Hexagonal Architecture** de Alistair Cockburn, descrita em 2005, sete anos antes. E a própria regra de Cockburn é uma aplicação direta do **Dependency Inversion Principle**, o "D" do SOLID, formalizado pelo próprio Martin em 1994. Três nomes, uma embalagem cada vez mais específica da mesma ideia, ao longo de dezoito anos.
+
+## 5. A cadeia `OrderPlaced` → `PaymentProcessed` é uma Saga — a de banco de dados de 1987, não um jargão de microsserviços
+
+`OrdersAPI` publica o `OrderPlacedEvent`; `PaymentsAPI` reage e publica o `PaymentProcessedEvent`; `OrdersAPI` reage a isso e conclui o pedido como `Paid` ou `Failed` (`instructions.md` §8). Isso é uma **Saga**: uma transação de negócio que não pode ser uma única transação ACID porque atravessa serviços separados, então é dividida em uma sequência de transações locais. O termo vem de um artigo da ACM de 1987, de Hector Garcia-Molina e Kenneth Salem — décadas antes de "microsserviços" virar palavra. A única peça que a saga deste projeto não precisa: uma transação *compensatória*. Um pagamento `Rejected` não precisa desfazer nada, porque nada foi efetivamente confirmado em nome do comprador até o pedido realmente se resolver — a saga aqui tem um caminho de falha, só não tem um rollback.
+
+## 6. Coreografia vs. orquestração é uma bifurcação com nome, não só "como o RabbitMQ funciona por acaso"
+
+Nada coordena a cadeia `OrderPlaced`/`PaymentProcessed` a partir de um ponto central — cada serviço reage a eventos e decide seu próprio próximo passo. Isso é **coreografia**, um dos dois estilos padrão para coordenar um processo de negócio multi-serviço (o outro, **orquestração**, tem um coordenador dedicado dizendo explicitamente a cada participante o que fazer em seguida, mais próximo de um motor de workflow). Os dois são nomeados, comparados e debatidos longamente na literatura de microsserviços (ex.: *Microservices Patterns*, de Chris Richardson, 2018) — escolher um dos dois aqui não foi um padrão-padrão do RabbitMQ, foi tomar um lado de uma troca arquitetural já estabelecida: a coreografia continua simples enquanto a cadeia for curta (e é, aqui — dois saltos), e fica difícil de acompanhar no momento em que um terceiro ou quarto serviço precisar reagir ao mesmo evento; a orquestração adiciona um coordenador, mas mantém todo o fluxo legível em um único lugar quando o processo cresce demais.
+
+## 7. `IPaymentGateway` é um Anti-Corruption Layer, o mesmo livro do Shared Kernel do `base-project`
+
+`PaymentsAPI` nunca deixa o vocabulário de status próprio da AbacatePay ou do Mercado Pago vazar para além de `IPaymentGateway` — cada implementação traduz a resposta específica do seu provedor para o `PaymentProcessedEvent` próprio deste sistema (`instructions.md` §5). Isso é o **Anti-Corruption Layer** de Eric Evans, do mesmo livro de 2003, *Domain-Driven Design*, que batizou o padrão Shared Kernel já coberto pelo próprio documento de descobertas do `base-project` — uma fronteira que existe especificamente para que o modelo de um sistema externo nunca possa ditar a forma do seu próprio domínio.
+
+## 8. Autenticação JWT via bearer é um padrão IETF do início dos anos 2010, não uma convenção específica de API REST
+
+Todo serviço aqui valida o mesmo cabeçalho `Authorization: Bearer <token>`, emitido uma única vez pelo `users-api`. O JWT em si é a **RFC 7519** (2015); o esquema "Bearer" é a **RFC 6750** (2012), parte do framework OAuth 2.0 (**RFC 6749**, 2012). Nada disso está atrelado a microsserviços, Kubernetes, ou sequer a REST especificamente — é maquinário genérico de autenticação HTTP anterior a toda essa arquitetura em uma década.
+
+## 9. O índice único parcial de `order_items` aplica uma regra de negócio do mesmo jeito que Codd disse, em 1970
+
+Duas restrições no Postgres — um índice único comum e um *parcial* (`WHERE status <> 'Failed'`) — garantem que não haja item duplicado em um pedido e nem posse ativa duplicada entre pedidos (`notes.md` 52), reforçando a checagem em nível de aplicação que é inerentemente sujeita a corrida sob concorrência. Deixar o próprio banco de dados ser a autoridade sobre uma regra de integridade, em vez de confiar que todo caminho de código vai checar antes, é a ideia central do **modelo relacional** que E. F. Codd introduziu em 1970 — uma constraint nada mais é do que uma afirmação formal e aplicada sobre quais dados podem existir, e o banco aplicando isso atomicamente é exatamente o que uma teoria de 55 anos disse que um banco de dados deveria fazer.
+
+## 10. Server-Sent Events é anterior ao WebSocket como padrão de navegador
+
+`GET /api/orders/{id}/stream` envia o status do pedido via SSE em vez de fazer polling (`notes.md` 53). É fácil presumir que o WebSocket é a opção "antiga" de tempo real e o SSE uma alternativa mais nova e simples, feita para casos que não precisam de tráfego nos dois sentidos — é o contrário. As raízes do `EventSource`/SSE estão nos rascunhos do HTML5 de meados dos anos 2000, e ele já era implementado nos navegadores anos antes do protocolo WebSocket sequer ser padronizado como **RFC 6455**, em dezembro de 2011. O SSE parecer "mais simples" não é um retrofit de design — ele veio primeiro, e o WebSocket foi construído depois, especificamente para o caso de mão dupla que o SSE nunca se propôs a resolver.
+
+## 11. "Entrega exatamente uma vez" não existe — este sistema consegue o mesmo efeito combinando duas garantias mais antigas
+
+O RabbitMQ (como todo message broker antes dele, remontando a ferramentas dos anos 1990 como o IBM MQSeries) só consegue realmente prometer entrega **pelo menos uma vez** através da rede — uma reentrega após uma queda ou um ack perdido é sempre possível. Este sistema nunca tenta evitar isso; em vez disso, todo consumidor é idempotente (descoberta 2), então um evento reentregue é processado com segurança em vez de nunca ser entregue. "Entrega pelo menos uma vez + um consumidor idempotente" é a receita de fato, com décadas de idade, geralmente vendida como "exatamente uma vez" — não há nenhum truque de mensageria por trás disso, só uma duplicata que silenciosamente não faz nada na segunda vez.
+
+## 12. Os subcharts Helm do `orchestration` são a convenção de "umbrella chart", não uma estrutura específica de cinco serviços
+
+O `orchestration/Chart.yaml` declara a pasta `/k8s` de cada serviço como uma dependência de subchart (`file://../catalog-api/k8s`, e assim por diante), compondo cinco charts versionados de forma independente em um único release implantável. Essa é a convenção de **umbrella chart** do próprio Helm, documentada há muito tempo e em uso desde a era do Helm v2 (a documentação da comunidade sobre dependências de chart remonta a ~2016) exatamente por esse motivo: deixar cada componente versionar e ser templado de forma independente, e um chart "pai" declarar "estes, juntos, são o release" — o arquivo de workspace raiz de um monorepo, só que para manifests do Kubernetes em vez de pacotes npm.
+
+## Glossário
+
+- **ACID** — Atomicidade, Consistência, Isolamento, Durabilidade: as quatro garantias de uma única transação de banco de dados; uma Saga existe justamente porque uma transação de negócio entre serviços não consegue as quatro de graça.
+- **Anti-Corruption Layer (ACL)** — um padrão de DDD: uma fronteira de tradução que impede o modelo de um sistema externo de vazar para o modelo do seu próprio domínio.
+- **Coreografia** — coordenar um processo multi-serviço sem um coordenador central; cada serviço reage a eventos por conta própria.
+- **DIP (Dependency Inversion Principle)** — o "D" do SOLID: código de alto nível deve depender de abstrações, não de implementações concretas de baixo nível.
+- **Hexagonal Architecture** — o estilo arquitetural de Alistair Cockburn, de 2005: a regra de negócio fica no centro, isolada de frameworks e infraestrutura por portas e adaptadores.
+- **Idempotente** — uma operação que produz o mesmo resultado aplicada uma vez ou várias; vem da álgebra abstrata do século XIX, não da computação.
+- **IETF / RFC** — a Internet Engineering Task Force e seus documentos de padrão numerados (Request for Comments) — o processo que produziu JWT, OAuth 2.0 e WebSocket como padrões abertos e neutros de fornecedor.
+- **Mônada Either** — um tipo de programação funcional que representa "um entre dois resultados" (normalmente sucesso/falha), sem lançar exceção; `Result<T>` é essa ideia com um nome amigável ao mundo orientado a objetos.
+- **Orquestração (neste contexto)** — coordenar um processo multi-serviço por meio de um coordenador central que diz explicitamente a cada participante o que fazer em seguida.
+- **Índice parcial** — um índice de banco de dados que cobre apenas as linhas que atendem a uma condição `WHERE`, permitindo que uma constraint valha para um subconjunto de uma tabela, não para ela inteira.
+- **Saga** — uma transação de negócio que atravessa múltiplos serviços, implementada como uma sequência de transações locais com (opcionalmente) um passo compensatório para cada uma.
+- **SSE (Server-Sent Events)** — um mecanismo de push via HTTP, de mão única, do servidor para o navegador (`text/event-stream`), mais antigo que o WebSocket como padrão de navegador.
+- **Transactional Outbox** — gravar uma mensagem de saída em uma tabela dentro da mesma transação de banco de dados da mudança de negócio que ela descreve, para que um processo separado a publique de forma confiável depois.
+- **Transação compensatória** — o passo de "desfazer" que uma Saga executa se uma etapa posterior falhar, para reverter o efeito de uma etapa anterior; a saga deste projeto não precisa de uma (ver descoberta 5).

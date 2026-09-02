@@ -41,6 +41,7 @@ This repo holds every spec, decision record, and narrative document for the proj
 
 | Document | Contents | Languages |
 |---|---|---|
+| [`DISCOVERIES.en-US.md`](discovers/DISCOVERIES.en-US.md) / [`.pt-BR`](discovers/DISCOVERIES.pt-BR.md) | Concepts that came up while building this, traced to where they actually originated | English, Português |
 | [`instructions.md`](spec/instructions.md) | The spec — architecture, service responsibilities, event contracts, Kubernetes requirements, acceptance criteria (checked off as they were verified) | English only |
 | [`notes.md`](spec/notes.md) | Decision record — why each choice was made, what was rejected, and what would reopen it | English only |
 | [`bdd.md`](spec/bdd.md) | Gherkin acceptance scenarios covering the event flows, order lifecycle, and deployment shape | English only |

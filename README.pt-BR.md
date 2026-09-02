@@ -41,6 +41,7 @@ Este repositório reúne toda especificação, registro de decisões e documenta
 
 | Documento | Conteúdo | Idiomas |
 |---|---|---|
+| [`DISCOVERIES.en-US.md`](discovers/DISCOVERIES.en-US.md) / [`.pt-BR`](discovers/DISCOVERIES.pt-BR.md) | Conceitos que surgiram durante a construção deste sistema, rastreados até sua origem real | Inglês, Português |
 | [`instructions.md`](spec/instructions.md) | A especificação — arquitetura, responsabilidades de cada serviço, contratos de eventos, requisitos de Kubernetes, critérios de aceitação (marcados conforme verificados) | Somente inglês |
 | [`notes.md`](spec/notes.md) | Registro de decisões — por que cada escolha foi feita, o que foi rejeitado, e o que a reabriria | Somente inglês |
 | [`bdd.md`](spec/bdd.md) | Cenários de aceitação em Gherkin cobrindo os fluxos de eventos, o ciclo de vida do pedido e a forma da implantação | Somente inglês |
