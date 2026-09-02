@@ -20,30 +20,7 @@ Sete repositórios independentes sob [`github.com/tc2-fiap`](https://github.com/
 
 Cada um desses oito repositórios tem seu próprio `README.md` (`notes.md` 34, 44). Cada repositório de backend segue a mesma camada interna usada pelos módulos do `base-project` — `Domain` → `Application` → `Infrastructure`, com `Endpoints` na camada mais externa, dependências apontando para dentro — mas como a estrutura do repositório *inteiro*, não um módulo dentro de um host compartilhado. Código de kernel livre de framework (`Result`, `Entity`, `IRepository`, paginação) e infraestrutura de JWT/tratamento de erros são **duplicados por serviço**, não empacotados (`notes.md` 21) — cinco cópias de ~13 arquivos pequenos, escolha feita em vez de um pacote NuGet compartilhado especificamente para evitar reintroduzir o acoplamento que a separação pretendia eliminar.
 
-```mermaid
-flowchart LR
-    Browser["Navegador"] -->|"uma única URL base"| Ingress["nginx-ingress"]
-    Ingress -->|"/"| Frontend["frontend"]
-    Ingress -->|"/api/users"| Users["users-api"]
-    Ingress -->|"/api/games, /api/quotations"| Catalog["catalog-api"]
-    Ingress -->|"/api/orders, /api/library"| Orders["orders-api"]
-    Ingress -->|"/api/payments"| Payments["payments-api"]
-    Ingress -->|"/api/notifications"| Notifications["notifications-api"]
-
-    Users -.->|consulta de preço, HTTP síncrono| Catalog
-    Catalog -.->|"cotação USD/BRL, cacheada"| Frankfurter[("Frankfurter /\nExchangeRate-API")]
-    Orders -.->|"OrderPlacedEvent"| RabbitMQ(("RabbitMQ"))
-    Payments -.->|"PaymentProcessedEvent"| RabbitMQ
-    RabbitMQ -.-> Orders
-    RabbitMQ -.-> Notifications
-    Users -.->|"UserCreatedEvent"| RabbitMQ
-
-    Users --> Postgres[("PostgreSQL\n(1 instância, 1 schema+role por serviço)")]
-    Catalog --> Postgres
-    Orders --> Postgres
-    Payments --> Postgres
-    Notifications --> Postgres
-```
+Veja o diagrama: [Topologia dos serviços](../diagrams/service-topology.md).
 
 Toda seta em direção ao Postgres usa um role restrito a exatamente um schema — uma consulta entre schemas é recusada pelo próprio Postgres, verificado ao vivo ao tentar uma com as credenciais de outro serviço (`instructions.md` §14).
 
@@ -88,58 +65,17 @@ Dois fluxos, ambos contratos fixos entre serviços (`instructions.md` §8) — r
 
 ### 5.1 Cadastro
 
-```mermaid
-sequenceDiagram
-    participant U as users-api
-    participant R as RabbitMQ
-    participant N as notifications-api
-
-    U->>U: cria User (Postgres)
-    U->>R: publica UserCreatedEvent
-    R->>N: UserCreatedEvent
-    N->>N: upsert de UserProjection
-    N->>N: TryClaim da chave de dedupe ("user-created:{UserId}")
-    alt primeira entrega
-        N->>N: envia e-mail de boas-vindas (console ou Resend)
-    else reentrega
-        N-->>N: ignora — já enviado
-    end
-```
+Veja o diagrama: [Fluxo de cadastro](../diagrams/registration-flow.md).
 
 ### 5.2 Compra
 
-```mermaid
-sequenceDiagram
-    participant C as Navegador
-    participant O as orders-api
-    participant Cat as catalog-api
-    participant R as RabbitMQ
-    participant P as payments-api
-    participant N as notifications-api
-
-    C->>O: POST /api/orders {GameIds}
-    O->>Cat: GET /api/games/{id}  (síncrono, uma vez por jogo pedido)
-    Cat-->>O: preço
-    O->>O: cria Order (Pending) com um OrderItem por jogo, adiciona OrderEvent
-    O->>R: publica OrderPlacedEvent {GameIds, TotalPrice} (mesma transação — outbox)
-    R->>P: OrderPlacedEvent
-    P->>P: TryClaim por OrderId (idempotente)
-    P->>P: IPaymentGateway.ChargeAsync (regra de preço determinística)
-    P->>P: persiste Payment (payload de request/response)
-    P->>R: publica PaymentProcessedEvent
-    R->>O: PaymentProcessedEvent
-    O->>O: MarkPaid/MarkFailed (unidirecional, no-op se já resolvido)
-    O->>O: adiciona OrderEvent
-    R->>N: PaymentProcessedEvent
-    N->>N: TryClaim por OrderId, consulta UserProjection
-    N->>N: envia confirmação ou aviso de falha
-```
+Veja o diagrama: [Fluxo de compra](../diagrams/purchase-flow.md).
 
 A leitura síncrona de preço (§ Orders → Catalog) é uma consulta que acontece *antes* do fluxo começar, uma vez por jogo pedido — o fluxo em si nunca bloqueia esperando outro serviço depois que o `OrderPlacedEvent` é publicado (`instructions.md` §6, §8). Antes até dessa leitura, o `OrderService.CreateAsync` verifica `IOrderRepository.GetConflictingGameIdsAsync(userId, gameIds)` — um usuário que já possui qualquer jogo pedido (`Paid`) ou tem uma compra em andamento para ele (`Pending`) tem o pedido *inteiro* rejeitado com `409 Conflict`, tudo ou nada em vez de cumprimento parcial; um item anterior `Failed` nunca bloqueia uma nova tentativa (`notes.md` 42). Essa verificação sozinha é vulnerável a condição de corrida (TOCTOU) sob requisições concorrentes, então ela é reforçada por dois índices únicos reais do Postgres em `order_items` — `(order_id, game_id)` e um índice parcial `(user_id, game_id) WHERE status <> 'Failed'` — que o `OrderService.CreateAsync` também precisa capturar como uma violação de unicidade (`DbUpdateException`/`PostgresException`) e traduzir para o mesmo `409`, para o caso raro de duas requisições concorrentes passarem ambas pela verificação da aplicação (`notes.md` 52, verificado contra uma instância real do Postgres).
 
 **Idempotência, na prática.** Todo consumer acima ou verifica uma chave de dedupe antes de agir (`notifications-api`, nos dois eventos) ou é naturalmente idempotente pelo próprio estado do domínio (`MarkPaid`/`MarkFailed` do `orders-api` viram no-op assim que o pedido sai de `Pending`; `payments-api` verifica se já existe um `Payment` antes de cobrar). Verificado ao vivo com uma ferramenta descartável de replay do MassTransit: reentregar qualquer um desses três eventos produz zero efeitos duplicados — nenhum segundo e-mail, nenhum segundo `Payment`, nenhum pedido revertendo de estado.
 
-**Quando um gateway real está configurado** (`PaymentGateway:Providers` inclui `abacatepay` e/ou `mercadopago`), o passo `P->>P: IPaymentGateway.ChargeAsync` acima passa a resolver via `PaymentGatewayChain` e pode retornar `Processing` em vez de um resultado final — o `payments-api` ainda persiste a linha `Payment`, mas **não** publica `PaymentProcessedEvent` ainda. Um `PaymentStatusPollingService` em background então consulta o provedor real com backoff exponencial até resolver (ou expirar em um `Rejected` forçado), publicando só então. O `Order` permanece `Pending` o tempo todo do ponto de vista do `orders-api` — nenhum contrato de evento mudou. Veja `notes.md` 38 para o design completo, incluindo por que o polling substitui o receptor de webhook, que está construído mas atualmente inativo.
+**Quando um gateway real está configurado** (`PaymentGateway:Providers` inclui `abacatepay` e/ou `mercadopago`), o passo `P->>P: IPaymentGateway.ChargeAsync` do diagrama de fluxo de compra passa a resolver via `PaymentGatewayChain` e pode retornar `Processing` em vez de um resultado final — o `payments-api` ainda persiste a linha `Payment`, mas **não** publica `PaymentProcessedEvent` ainda. Um `PaymentStatusPollingService` em background então consulta o provedor real com backoff exponencial até resolver (ou expirar em um `Rejected` forçado), publicando só então. O `Order` permanece `Pending` o tempo todo do ponto de vista do `orders-api` — nenhum contrato de evento mudou. Veja `notes.md` 38 para o design completo, incluindo por que o polling substitui o receptor de webhook, que está construído mas atualmente inativo.
 
 ### 5.3 Exibição da cotação, o checkout e o status ao vivo (adições síncronas/HTTP, sem eventos novos)
 
@@ -158,25 +94,13 @@ O `users-api` semeia uma conta `Admin` na inicialização a partir de configura�
 
 A visão de auditoria é **composta na camada de visualização, nunca unida na camada de banco de dados** — consultas entre schemas continuam recusadas. Quatro endpoints independentes, admin-only, cada um retornando o dado do seu próprio serviço com o payload *real* trocado, não um resumo:
 
-```mermaid
-flowchart TB
-    Admin["Admin (frontend)"] --> OA["GET /api/orders/admin\n(pedidos de todos os usuários)"]
-    Admin --> OE["GET /api/orders/{id}/events\n(orders-api)"]
-    Admin --> PA["GET /api/payments/{orderId}\n(payments-api)"]
-    Admin --> NA["GET /api/notifications?orderId=\n(notifications-api)"]
-```
+Veja o diagrama: [Trilha de auditoria por pedido](../diagrams/audit-trail.md).
 
 A única peça arquitetural nova exigida por isso: o `UserProjection` do `notifications-api`, um read-model local mantido atualizado a partir do `UserCreatedEvent`, porque o contrato fixo do `PaymentProcessedEvent` carrega apenas um `UserId`, e este serviço precisa de um endereço de e-mail para de fato enviar (`notes.md` 30).
 
 **Eventos de todo o sistema, não só de um pedido (`notes.md` 43).** A visão por pedido acima responde "o que aconteceu com este pedido" — ela não responde "mostre todo `UserCreatedEvent` já publicado". Uma segunda página de admin, `/admin/events`, faz isso: filtrável por origem, tipo, categoria e intervalo de datas, composta da mesma forma a partir de quatro endpoints *diferentes* de admin "listar tudo":
 
-```mermaid
-flowchart TB
-    AdminEvents["Admin (frontend) — /admin/events"] --> UE["GET /api/users/admin/events\n(users-api, nova tabela UserEvent)"]
-    AdminEvents --> OAE["GET /api/orders/admin/events\n(orders-api, tabela OrderEvent existente)"]
-    AdminEvents --> PAA["GET /api/payments/admin\n(payments-api, tabela Payment existente)"]
-    AdminEvents --> NAA["GET /api/notifications/admin\n(notifications-api, tabela Notification existente)"]
-```
+Veja o diagrama: [Eventos de todo o sistema](../diagrams/system-events.md).
 
 Só o `users-api` precisou de uma tabela nova (`UserEvent`) — era o único serviço sem nenhum registro de que o `UserCreatedEvent` havia sido publicado. `orders-api`, `payments-api` e `notifications-api` já tinham uma tabela com tudo o que era necessário (`OrderEvent`, `Payment` e `Notification`, respectivamente); cada um só ganhou uma nova consulta paginada e sem escopo por pedido sobre dados que já persistia. O `catalog-api` está ausente dos dois diagramas — ele não publica nem consome nada.
 

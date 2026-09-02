@@ -20,30 +20,7 @@ Seven independent repos under [`github.com/tc2-fiap`](https://github.com/tc2-fia
 
 Every one of these eight repos has its own `README.md` (`notes.md` 34, 44). Each backend repo follows the same internal layering `base-project`'s modules used — `Domain` → `Application` → `Infrastructure`, with `Endpoints` outermost, dependencies pointing inward — but as the *entire* repo's structure, not a module within a shared host. Framework-free kernel code (`Result`, `Entity`, `IRepository`, pagination) and JWT/error-handling infrastructure are **duplicated per service**, not packaged (`notes.md` 21) — five copies of ~13 small files, chosen over a shared NuGet package specifically to avoid reintroducing the coupling the split was meant to remove.
 
-```mermaid
-flowchart LR
-    Browser["Browser"] -->|"one base URL"| Ingress["nginx-ingress"]
-    Ingress -->|"/"| Frontend["frontend"]
-    Ingress -->|"/api/users"| Users["users-api"]
-    Ingress -->|"/api/games, /api/quotations"| Catalog["catalog-api"]
-    Ingress -->|"/api/orders, /api/library"| Orders["orders-api"]
-    Ingress -->|"/api/payments"| Payments["payments-api"]
-    Ingress -->|"/api/notifications"| Notifications["notifications-api"]
-
-    Users -.->|price lookup, sync HTTP| Catalog
-    Catalog -.->|"USD/BRL rate, cached"| Frankfurter[("Frankfurter /\nExchangeRate-API")]
-    Orders -.->|"OrderPlacedEvent"| RabbitMQ(("RabbitMQ"))
-    Payments -.->|"PaymentProcessedEvent"| RabbitMQ
-    RabbitMQ -.-> Orders
-    RabbitMQ -.-> Notifications
-    Users -.->|"UserCreatedEvent"| RabbitMQ
-
-    Users --> Postgres[("PostgreSQL\n(1 instance, 1 schema+role per service)")]
-    Catalog --> Postgres
-    Orders --> Postgres
-    Payments --> Postgres
-    Notifications --> Postgres
-```
+See the diagram: [Service topology](../diagrams/service-topology.md) (labels in Portuguese — see `notes.md` for why `diagrams/` is single-language).
 
 Every arrow into Postgres uses a role scoped to exactly one schema — a cross-schema query is refused by Postgres itself, verified live by attempting one with another service's credentials (`instructions.md` §14).
 
@@ -88,58 +65,17 @@ Two flows, both fixed contracts across services (`instructions.md` §8) — rena
 
 ### 5.1 Registration
 
-```mermaid
-sequenceDiagram
-    participant U as users-api
-    participant R as RabbitMQ
-    participant N as notifications-api
-
-    U->>U: create User (Postgres)
-    U->>R: publish UserCreatedEvent
-    R->>N: UserCreatedEvent
-    N->>N: upsert UserProjection
-    N->>N: TryClaim dedupe key ("user-created:{UserId}")
-    alt first delivery
-        N->>N: send welcome email (console or Resend)
-    else redelivered
-        N-->>N: skip — already sent
-    end
-```
+See the diagram: [Registration flow](../diagrams/registration-flow.md).
 
 ### 5.2 Purchase
 
-```mermaid
-sequenceDiagram
-    participant C as Browser
-    participant O as orders-api
-    participant Cat as catalog-api
-    participant R as RabbitMQ
-    participant P as payments-api
-    participant N as notifications-api
-
-    C->>O: POST /api/orders {GameIds}
-    O->>Cat: GET /api/games/{id}  (sync, once per requested game)
-    Cat-->>O: price
-    O->>O: create Order (Pending) with one OrderItem per game, append OrderEvent
-    O->>R: publish OrderPlacedEvent {GameIds, TotalPrice} (same transaction — outbox)
-    R->>P: OrderPlacedEvent
-    P->>P: TryClaim by OrderId (idempotent)
-    P->>P: IPaymentGateway.ChargeAsync (deterministic price rule)
-    P->>P: persist Payment (request/response payload)
-    P->>R: publish PaymentProcessedEvent
-    R->>O: PaymentProcessedEvent
-    O->>O: MarkPaid/MarkFailed (one-way, no-op if already settled)
-    O->>O: append OrderEvent
-    R->>N: PaymentProcessedEvent
-    N->>N: TryClaim by OrderId, look up UserProjection
-    N->>N: send confirmation or failure notice
-```
+See the diagram: [Purchase flow](../diagrams/purchase-flow.md).
 
 The synchronous price read (§ Orders → Catalog) is a query that happens *before* the flow starts, once per requested game — the flow itself never blocks on another service once `OrderPlacedEvent` is published (`instructions.md` §6, §8). Before even that read, `OrderService.CreateAsync` checks `IOrderRepository.GetConflictingGameIdsAsync(userId, gameIds)` — a user who already owns any requested game (`Paid`) or has a purchase for it in flight (`Pending`) gets the *whole* order rejected with `409 Conflict`, all-or-nothing rather than partial fulfillment; a prior `Failed` item never blocks a retry (`notes.md` 42). That check alone is TOCTOU-racy under concurrent requests, so it's backed by two real Postgres unique indexes on `order_items` — `(order_id, game_id)` and a partial `(user_id, game_id) WHERE status <> 'Failed'` — which `OrderService.CreateAsync` also has to catch as a `DbUpdateException`/`PostgresException` unique-violation and translate into the same `409`, for the rare case two concurrent requests both pass the application check (`notes.md` 52, verified against a live Postgres instance).
 
 **Idempotency, concretely.** Every consumer above either checks a dedupe key before acting (`notifications-api`, both events) or is naturally idempotent by domain state (`orders-api`'s `MarkPaid`/`MarkFailed` no-op once the order has left `Pending`; `payments-api` checks for an existing `Payment` row before charging). Verified live with a throwaway MassTransit replay tool: redelivering any of these three events produces zero duplicate effects — no second email, no second `Payment` row, no order flipping backwards.
 
-**When a real gateway is configured** (`PaymentGateway:Providers` includes `abacatepay` and/or `mercadopago`), step `P->>P: IPaymentGateway.ChargeAsync` above resolves through `PaymentGatewayChain` and can return `Processing` instead of a final outcome — `payments-api` still persists the `Payment` row but does **not** publish `PaymentProcessedEvent` yet. A background `PaymentStatusPollingService` then polls the real provider on an exponential backoff until it resolves (or times out into a forced `Rejected`), and publishes then. `Order` stays `Pending` the whole time from `orders-api`'s perspective — no event contract changed. See `notes.md` 38 for the full design, including why polling stands in for the webhook receiver that's built but currently dormant.
+**When a real gateway is configured** (`PaymentGateway:Providers` includes `abacatepay` and/or `mercadopago`), the `P->>P: IPaymentGateway.ChargeAsync` step in the purchase-flow diagram resolves through `PaymentGatewayChain` and can return `Processing` instead of a final outcome — `payments-api` still persists the `Payment` row but does **not** publish `PaymentProcessedEvent` yet. A background `PaymentStatusPollingService` then polls the real provider on an exponential backoff until it resolves (or times out into a forced `Rejected`), and publishes then. `Order` stays `Pending` the whole time from `orders-api`'s perspective — no event contract changed. See `notes.md` 38 for the full design, including why polling stands in for the webhook receiver that's built but currently dormant.
 
 ### 5.3 Quotation display, checkout, and live status (synchronous/HTTP additions, no new events)
 
@@ -158,25 +94,13 @@ Added after the core purchase flow (`notes.md` 26–30, 32), once the requiremen
 
 The audit view is **composed at the view layer, never joined at the database layer** — cross-schema queries stay refused. Four independent admin-only endpoints, each returning its own service's data with the *actual* payload exchanged, not a summary:
 
-```mermaid
-flowchart TB
-    Admin["Admin (frontend)"] --> OA["GET /api/orders/admin\n(all users' orders)"]
-    Admin --> OE["GET /api/orders/{id}/events\n(orders-api)"]
-    Admin --> PA["GET /api/payments/{orderId}\n(payments-api)"]
-    Admin --> NA["GET /api/notifications?orderId=\n(notifications-api)"]
-```
+See the diagram: [Per-order audit trail](../diagrams/audit-trail.md).
 
 The one new architectural piece this required: `notifications-api`'s `UserProjection`, a local read-model kept current from `UserCreatedEvent`, because `PaymentProcessedEvent`'s fixed contract carries only a `UserId` and this service needs an email address to actually send to (`notes.md` 30).
 
 **System-wide events, not just one order (`notes.md` 43).** The per-order view above answers "what happened to this order" — it doesn't answer "show me every `UserCreatedEvent` ever published." A second admin page, `/admin/events`, does that: filterable by source, kind, type, and date range, composed the same way from four *different* admin-only "list all" endpoints:
 
-```mermaid
-flowchart TB
-    AdminEvents["Admin (frontend) — /admin/events"] --> UE["GET /api/users/admin/events\n(users-api, new UserEvent table)"]
-    AdminEvents --> OAE["GET /api/orders/admin/events\n(orders-api, existing OrderEvent table)"]
-    AdminEvents --> PAA["GET /api/payments/admin\n(payments-api, existing Payment table)"]
-    AdminEvents --> NAA["GET /api/notifications/admin\n(notifications-api, existing Notification table)"]
-```
+See the diagram: [System-wide events](../diagrams/system-events.md).
 
 Only `users-api` needed a new table (`UserEvent`) — it was the one service with no record at all that `UserCreatedEvent` had been published. `orders-api`, `payments-api`, and `notifications-api` already had a table with everything needed (`OrderEvent`, `Payment`, `Notification` respectively); each just gained a new unscoped, paginated query over data it already persisted. `catalog-api` is absent from both diagrams — it publishes and consumes nothing.
 

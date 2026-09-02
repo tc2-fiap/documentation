@@ -857,3 +857,15 @@ Each page's own title (`<h1 className="page-title">`, icon + translated text) ke
 **Why a pulse, not a moving shimmer gradient.** `.skeleton`'s animation is a plain opacity pulse (`@keyframes skeleton-pulse { 0%,100% {opacity:1} 50% {opacity:.5} }`) on a `var(--color-surface-raised)` block — the simplest option that automatically looks correct in all three themes (dark/mixed/light, entries 60/62) with no extra gradient tokens to define and keep in sync.
 
 **Revisit if:** a page's real layout changes enough that its skeleton visibly mismatches (e.g., a table gains/loses a column) — the skeleton's row/column counts are hardcoded per page-call-site, not derived from the real `<thead>`, so they need updating alongside it.
+
+---
+
+## 65. `ARCHITECTURE.md`'s five diagrams moved into their own `diagrams/` folder, Portuguese-only, no language suffix on the filenames
+
+**Decision.** Each of `ARCHITECTURE.en-US.md`/`.pt-BR.md`'s five `mermaid` diagrams (service topology, registration flow, purchase flow, per-order audit trail, system-wide events) moved out into its own file under a new `repos/documentation/diagrams/` — a plain `.md` per diagram (`service-topology.md`, `registration-flow.md`, `purchase-flow.md`, `audit-trail.md`, `system-events.md`), each still just a `mermaid` fence wrapped in a one-paragraph caption, so GitHub still renders it as an actual diagram when that file is opened directly — a bare `.mmd` file wouldn't get that treatment, only a fenced block inside a `.md` GitHub is displaying does. Both `ARCHITECTURE.*.md` files now link out to these instead of embedding the diagram inline.
+
+**Why this mirrors `base-project/docs/diagrams/` in name only, not in reason.** `base-project`'s `diagrams/` holds two binary JPGs — extracted into their own folder because an image literally can't be inlined as markdown text, not a stylistic preference. This repo's diagrams were plain `mermaid` text, inlined and auto-rendered by GitHub already; moving them out has a real cost (a reader following the prose has to click out instead of seeing the picture immediately) taken on anyway, for the benefit of a diagram being independently linkable/referenceable.
+
+**Why Portuguese-only, not English, and no `.en-US`/`.pt-BR` split.** The diagrams were previously translated per language (e.g. `Browser`/`Navegador`, `one base URL`/`uma única URL base`) — keeping that parity properly would mean 10 files (5 diagrams × 2 languages) instead of 5, and two copies of every diagram's structure to hand-keep in sync if a flow ever changes. Given a choice between English-only and Portuguese-only for the single shared copy, Portuguese-only was chosen — `ARCHITECTURE.en-US.md` now links out to a Portuguese-labeled diagram, noted inline where it does.
+
+**Revisit if:** a diagram's underlying flow changes — it only needs updating in its one file in `diagrams/` now, not in two inline copies across both `ARCHITECTURE.*.md` files, which was the whole point. If diagram content needs to fork by language again, this entry's "10 files" alternative is what reopens.
