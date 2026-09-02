@@ -50,7 +50,43 @@ kubectl wait --namespace ingress-nginx \
   --timeout=120s
 ```
 
-## 3. Instalar o sistema
+Esse `kubectl wait` geralmente leva cerca de 30 segundos — a imagem do controlador precisa ser baixada e os jobs do admission webhook precisam terminar antes do pod reportar prontidão. Deixe rodar até o fim em vez de interromper — instalar o chart antes do controlador (e do Service do seu webhook) estar realmente pronto falha com `connection refused` ao chamar `ingress-nginx-controller-admission`.
+
+## 3. Construir e carregar as imagens
+
+Cada serviço tem seu próprio `Dockerfile` — os cinco serviços de backend têm o deles em `<repo>/src/FiapGames.<Nome>.Api/Dockerfile`, o do `frontend` fica na raiz do próprio repositório — e o chart espera que as imagens resultantes já estejam no cluster; nada aqui puxa de um registry. Construa cada uma com o nome que o próprio `k8s/values.yaml` do serviço espera (`repository: <nome>`, `tag: latest`) e carregue-as diretamente no containerd do `kind`:
+
+```bash
+docker build -t users-api:latest         users-api/src/FiapGames.Users.Api
+docker build -t catalog-api:latest       catalog-api/src/FiapGames.Catalog.Api
+docker build -t orders-api:latest        orders-api/src/FiapGames.Orders.Api
+docker build -t payments-api:latest      payments-api/src/FiapGames.Payments.Api
+docker build -t notifications-api:latest notifications-api/src/FiapGames.Notifications.Api
+docker build -t frontend:latest          frontend
+
+kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
+  payments-api:latest notifications-api:latest frontend:latest --name fiap-games
+```
+
+Verifique se cada imagem foi de fato construída e carregada no containerd do cluster antes de seguir em frente — é a checagem que teria pego o `ImagePullBackOff` da tabela de Solução de problemas antes mesmo do `helm install` rodar:
+
+```bash
+NODE=fiap-games-control-plane
+LOADED=$(docker exec "$NODE" crictl images)
+for img in users-api catalog-api orders-api payments-api notifications-api frontend; do
+  if ! docker image inspect "${img}:latest" >/dev/null 2>&1; then
+    echo "✗ ${img}:latest — não foi construída localmente"
+  elif ! echo "$LOADED" | grep -qE "^docker.io/library/${img}\s+latest\s"; then
+    echo "✗ ${img}:latest — construída mas NÃO carregada no kind (kind load docker-image ${img}:latest --name fiap-games)"
+  else
+    echo "✓ ${img}:latest — construída e carregada"
+  fi
+done
+```
+
+Todas as seis linhas devem mostrar `✓` (o script usa `${img}:latest` em vez de `$img:latest` de propósito — no zsh, `$var:latest` sem chaves é interpretado como o modificador de histórico `:l` aplicado a `$var`, corrompendo silenciosamente a string para `users-apiatest`). Repita este passo inteiro (reconstruir e recarregar) depois de alterar o código de qualquer serviço — é o `kind load docker-image` que efetivamente leva uma nova build até o cluster; um `docker build` isolado é invisível para ele.
+
+## 4. Instalar o sistema
 
 ```bash
 cd orchestration
@@ -62,7 +98,7 @@ helm install fiap-games .
 
 Isso sobe 8 pods: Postgres, RabbitMQ, os cinco serviços de backend e o frontend, todos no namespace `fiap-games`, todos conectados a um único Ingress em `http://localhost`.
 
-## 4. Verificar
+## 5. Verificar
 
 ```bash
 kubectl get pods -n fiap-games
@@ -84,7 +120,7 @@ kubectl exec -n fiap-games deploy/postgres -- \
 
 (A senha do role é `orders-dev-password`, conforme `values.yaml`; o `psql` dentro do pod usa o socket local, então não pede senha.)
 
-## 5. Passo a passo de demonstração
+## 6. Passo a passo de demonstração
 
 Tudo abaixo passa pela única URL base do Ingress — sem port-forward, sem hostname por serviço.
 
@@ -104,7 +140,7 @@ curl -s -X POST $BASE/api/users/register -H "Content-Type: application/json" -d 
 TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
   "email": "ada@example.com",
   "password": "correct-horse-battery-staple"
-}' | jq -r '.token')
+}' | jq -r '.accessToken')
 ```
 
 Acompanhe `kubectl logs -n fiap-games deploy/notifications-api -f` em outro terminal — o cadastro deve produzir uma linha de log de e-mail de boas-vindas em um ou dois segundos (`UserCreatedEvent` indo e voltando pelo RabbitMQ).
@@ -160,7 +196,7 @@ A conta de admin semeada (`admin.email`/`admin.password` do `values.yaml` — `a
 ADMIN_TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
   "email": "admin@fiapgames.local",
   "password": "admin-dev-password-change-me"
-}' | jq -r '.token')
+}' | jq -r '.accessToken')
 
 curl -s $BASE/api/orders/admin -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 curl -s $BASE/api/orders/$ORDER_ID/events -H "Authorization: Bearer $ADMIN_TOKEN" | jq
@@ -193,7 +229,7 @@ Cadastre-se ou faça login (um botão de login com Google aparece automaticament
 
 O cabeçalho tem uma alternância EN/PT, visível mesmo antes de fazer login. Trocar para português sempre mostra o BRL nativo (ex.: `R$ 29,99`); trocar para inglês converte todo preço do catálogo para o equivalente em USD usando a cotação ao vivo, voltando para BRL se a cotação estiver indisponível — nunca um preço em branco ou quebrado. O carrinho, o checkout e a página do pedido sempre mostram as duas moedas juntas, independente da alternância. A escolha de idioma em si persiste entre recarregamentos (`notes.md` 35, 36, 39).
 
-## 6. Encerrar o ambiente
+## 7. Encerrar o ambiente
 
 ```bash
 helm uninstall fiap-games
@@ -213,6 +249,7 @@ Todo repositório de backend e o frontend também rodam sozinhos via seu própri
 | `helm install` reclama de um chart archive faltando | Rode `helm dependency update` em `orchestration/` primeiro — as dependências do chart guarda-chuva são caminhos locais `file://` que precisam ser resolvidos em `charts/*.tgz` |
 | `helm dependency update` não consegue resolver uma dependência (`../users-api/k8s` não encontrado, etc.) | Os seis repositórios irmãos precisam estar clonados ao lado de `orchestration/`, com seus nomes de pasta padrão — veja o [passo 1](#1-clonar-os-repositórios) |
 | `curl $BASE/...` dá connection refused | O controlador de ingress ainda não está pronto, ou o cluster kind não foi criado com os mapeamentos de porta em `kind/cluster-config.yaml` |
+| Um pod fica em `ImagePullBackOff`/`ErrImagePull` para `<service>:latest` (`pull access denied, repository does not exist`) | A imagem nunca foi construída nem carregada no cluster — veja o [passo 3](#3-construir-e-carregar-as-imagens); um `docker build` isolado não chega ao containerd do `kind`, só o `kind load docker-image` faz isso |
 | O botão do Google nunca aparece | Esperado quando não há `Google:ClientId` configurado — `GET /api/users/config` reporta `googleSignInEnabled: false` e o frontend o esconde deliberadamente, em vez de mostrar um botão fadado a falhar |
 | Nenhum e-mail chega apesar de `EMAIL_PROVIDER=resend` | Verifique os logs do `notifications-api` e o Secret `resend-credentials` — uma `RESEND_API_KEY` ausente/inválida faz o envio falhar, e isso fica registrado na própria linha de `Notification` (visível via o endpoint admin de notificações), não é silenciosamente engolido |
 | Preços do catálogo aparecem em BRL mesmo com a alternância em inglês | `GET /api/quotations/usd-brl` retornou `409` — tanto o Frankfurter quanto o ExchangeRate-API estão inacessíveis (geralmente um cluster sem acesso de saída à internet); o frontend degrada para o BRL nativo por design, em vez de mostrar um preço quebrado — veja os logs do `catalog-api` para saber qual provedor falhou e por quê |

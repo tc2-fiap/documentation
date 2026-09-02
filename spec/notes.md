@@ -881,3 +881,23 @@ Each page's own title (`<h1 className="page-title">`, icon + translated text) ke
 **The convention going forward** (added to `CLAUDE.md`'s Conventions section): don't state `notes.md`'s total entry count as a literal number in prose anywhere. Citing one specific entry by number is fine and expected; stating how many entries exist in total is the thing to avoid.
 
 **Revisit if:** a genuine need arises to convey the record's size to a reader without opening the file — at that point a qualitative phrase ("dozens of entries," "a long-running decision log") is the fix, not a literal count that needs a human to notice and update it every time an entry is appended.
+
+---
+
+## 67. `GETTING_STARTED.md` was missing the image build/load step entirely
+
+**Decision.** A new step 3, "Build and load the images," was inserted between "Create the cluster" and "Install the system" in both `GETTING_STARTED.en-US.md` and `.pt-BR.md` (renumbering the four steps after it), and a matching row was added to the Troubleshooting table.
+
+**Context.** A live walkthrough of the doc, run step by step exactly as written, got past `helm install` (once a separate `kubectl wait` timing issue on the ingress controller was also worked around) only to have every backend pod land in `ImagePullBackOff`, e.g. `Failed to pull image "users-api:latest": ... docker.io/library/users-api:latest: pull access denied, repository does not exist`. Each service's `k8s/values.yaml` sets `image.repository: <service>`, `image.tag: latest` with no registry prefix — deliberately, so the chart works the same locally as it would against any registry once one is configured — which means an unqualified name falls back to Docker Hub's `library/` namespace when the image isn't already sitting in the cluster's containerd. Nothing in the doc ever built the six `Dockerfile`s (five backend services at `<repo>/src/FiapGames.<Name>.Api/Dockerfile`, `frontend` at its repo root) or ran `kind load docker-image` to get them there — the doc had simply never been executed start-to-finish on a genuinely empty environment before this.
+
+**Revisit if:** a registry gets introduced into the local flow (an in-cluster registry, or `kind`'s config pointing at a real one) — at that point step 3 changes from "build + `kind load docker-image`" to "build + push," and the Troubleshooting row's guidance changes with it.
+
+---
+
+## 68. `GETTING_STARTED.md`'s demo walkthrough extracted the login token from the wrong JSON field
+
+**Decision.** Both `jq -r '.token'` calls in the demo walkthrough (the main user login and the admin login) were corrected to `jq -r '.accessToken'`, matching what `POST /api/users/login` actually returns.
+
+**Context.** Running the walkthrough live, `$TOKEN` came out as the literal string `"null"` — `jq` doesn't error on a missing field, it just returns `null` — so every subsequent authenticated call sent `Authorization: Bearer null` and got back a `401` with an empty body. That empty body is what made the failure invisible in a terminal transcript: `curl -s ... | jq` on an empty response prints nothing, so the games list, the order creation, and the library lookup all silently produced no output, with no visible error pointing at the actual cause.
+
+**Revisit if:** the login response DTO's field name changes again — at that point this same class of bug reopens, and the fix is the same: match the walkthrough's `jq` filter to the field the endpoint actually returns, not to what seems like the natural name for it.
