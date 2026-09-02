@@ -72,11 +72,11 @@ Registration, authentication, and authorization. Owns the `User` aggregate. Issu
 
 Also supports:
 - **Google sign-in** (`POST /api/users/login/google`) — verifies a client-obtained Google ID token server-side and issues the same JWT any other login path issues. Auto-links to an existing password account by email. See [`notes.md`](notes.md) 28.
-- **Roles.** `User.Role` is `Player` or `Admin`. One admin is seeded at startup from Secret-provided config; every other admin is promoted by an existing one (`PUT /api/users/{id}/role`, admin-only). See [`notes.md`](notes.md) 26.
+- **Roles.** `User.Role` is `Player` or `Admin`. One admin and one player are seeded at startup from Secret-provided config; every other admin is promoted by an existing one (`PUT /api/users/{id}/role`, admin-only). See [`notes.md`](notes.md) 26, 63.
 - **Admin visibility.** An admin can see every user's orders and, per order, the full cross-service trail — see [§4.3](#43-ordersapi), [§4.4](#44-paymentsapi), and [§4.5](#45-notificationsapi).
 
 ### 4.2 CatalogAPI
-CRUD for the game catalog — **product reference data only**. Owns the `Game` aggregate: title, genre, platform, description, price, release date. Read-heavy, not user-scoped, and deliberately **outside the purchase flow**: it publishes no events and consumes none. Its only role in a purchase is answering "does this game exist and what does it cost" when OrdersAPI asks ([§6](#6-how-orders-learns-the-price)).
+CRUD for the game catalog — **product reference data only**. Owns the `Game` aggregate: title, genre, platform, description, price, release date. Read-heavy, not user-scoped, and deliberately **outside the purchase flow**: it publishes no events and consumes none. Its only role in a purchase is answering "does this game exist and what does it cost" when OrdersAPI asks ([§6](#6-how-orders-learns-the-price)). `GET /api/games` is open to any authenticated user and supports search/filter/sort query params; `POST`/`PUT`/`DELETE` are admin-only. See [`notes.md`](notes.md) 63.
 
 ### 4.3 OrdersAPI
 Owns the purchase lifecycle and, by extension, each user's library. Owns the `Order` aggregate: `OrderId`, `UserId`, `Status` (`Pending` → `Paid` | `Failed`), timestamps, and a collection of `OrderItem { GameId, Price }` (each price a **snapshot** taken at order time) — a cart checkout places one order for several games, so an order is multi-item, not a single game/price pair. `TotalPrice` is the sum of its items' snapshotted prices. Two DB-level unique constraints on `order_items` keep two invariants that used to be application-only checks: a game can't appear twice in the same order, and (excluding `Failed` items) a user can't have two active order items for the same game across any of their orders. See [`notes.md`](notes.md) 51–52.
@@ -84,6 +84,7 @@ Owns the purchase lifecycle and, by extension, each user's library. Owns the `Or
 - Exposes the purchase entry point (`POST /api/orders`, taking `GameIds: Guid[]`), which validates and prices each requested game against CatalogAPI, persists the order as `Pending`, and publishes `OrderPlacedEvent`.
 - Consumes `PaymentProcessedEvent` and transitions the order (and each of its items) to `Paid` or `Failed`.
 - Exposes the user's library (`GET /api/library`) as a flattened, per-game projection over the items of that user's `Paid` orders that haven't been removed from the library — one row per purchased, still-in-library game, not one row per order.
+- Exposes a user's own order history (`GET /api/orders/mine`), every status included — not just `Paid`/library. See [`notes.md`](notes.md) 63.
 - Exposes live order status (`GET /api/orders/{id}/stream`, Server-Sent Events) instead of requiring the client to poll — pushes the current status immediately and one more update when the order leaves `Pending`. See [`notes.md`](notes.md) 53.
 - Lets a user remove a game from their library (`DELETE /api/library/{gameId}`, confirmed client-side via a modal): sets `OrderItem.RemovedFromLibraryAtUtc`, which excludes the item from the library projection **and** frees the game up for repurchase — without ever touching `Order.Status` or reversing the original charge. See [`notes.md`](notes.md) 54.
 - Appends an `OrderEvent` audit row (the actual event payload, not a summary) whenever it publishes `OrderPlacedEvent` or receives `PaymentProcessedEvent`. Admin-only: `GET /api/orders/admin` (every user's orders) and `GET /api/orders/{id}/events` (that order's audit trail). See [`notes.md`](notes.md) 30.
@@ -177,7 +178,7 @@ Note this is a **synchronous read for validation**, which is a different thing f
 
 ## 7. Frontend
 
-**React + Vite**, built to static files and served by nginx in a multi-stage container (Vite build stage → nginx runtime stage). Screens: registration/login, catalog browsing, a `localStorage`-backed cart and checkout confirmation, order status, and the user's library.
+**React + Vite**, built to static files and served by nginx in a multi-stage container (Vite build stage → nginx runtime stage). Screens: registration/login, catalog browsing, a `localStorage`-backed cart and checkout confirmation, order status, the user's library, a user's own order history, and (admin-only) a game-creation form.
 
 Checkout has two entry points — `Add to Cart` then a `/cart` review, or a `Buy Now` shortcut on the catalog — but both land on the same `/checkout` confirmation page before an order is actually placed; neither skips the review step. See [`notes.md`](notes.md) 51.
 

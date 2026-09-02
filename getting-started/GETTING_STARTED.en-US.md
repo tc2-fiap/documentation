@@ -167,6 +167,8 @@ curl -s $BASE/api/payments/$ORDER_ID -H "Authorization: Bearer $ADMIN_TOKEN" | j
 curl -s "$BASE/api/notifications?orderId=$ORDER_ID" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 ```
 
+A seeded non-admin account is also ready for the ordinary purchase flow, no registration needed (`values.yaml`'s `player.email`/`player.password` — `player@fiapgames.local` / `player-dev-password-change-me` by default).
+
 The payments and notifications responses include the actual request/response payloads exchanged with the gateway and email provider — real JSON, not a summary, even for the simulated gateway (`notes.md`'s audit-trail entry). Confirm the boundary holds — the same four calls with `$TOKEN` (a non-admin) instead of `$ADMIN_TOKEN` should all return `403`.
 
 The four calls above are scoped to one order. To browse every event/message across the whole system instead — every `UserCreatedEvent` ever published, every purchase-flow event, every payment, every notification, not just one order's — use the system-wide "list all" endpoints (`notes.md` 43):

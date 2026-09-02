@@ -167,6 +167,8 @@ curl -s $BASE/api/payments/$ORDER_ID -H "Authorization: Bearer $ADMIN_TOKEN" | j
 curl -s "$BASE/api/notifications?orderId=$ORDER_ID" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 ```
 
+Uma conta não-admin também já vem semeada para o fluxo comum de compra, sem precisar de cadastro (`player.email`/`player.password` do `values.yaml` — `player@fiapgames.local` / `player-dev-password-change-me` por padrão).
+
 As respostas de pagamentos e notificações incluem os payloads reais de request/response trocados com o gateway e o provedor de e-mail — JSON real, não um resumo, mesmo para o gateway simulado (entrada de trilha de auditoria do `notes.md`). Confirme que a fronteira se mantém — as mesmas quatro chamadas com `$TOKEN` (um usuário não-admin) em vez de `$ADMIN_TOKEN` devem retornar `403`.
 
 As quatro chamadas acima são restritas a um pedido. Para navegar por todo evento/mensagem do sistema inteiro — cada `UserCreatedEvent` já publicado, cada evento do fluxo de compra, cada pagamento, cada notificação, não só de um pedido — use os endpoints "listar tudo" de todo o sistema (`notes.md` 43):
