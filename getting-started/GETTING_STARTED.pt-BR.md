@@ -8,7 +8,7 @@ Para entender a arquitetura, veja [`ARCHITECTURE.pt-BR.md`](../architecture/ARCH
 
 ## Pré-requisitos
 
-- **Docker** — o kind roda o cluster como um container.
+- **Docker**, com o plugin de CLI **`buildx`** — o kind roda o cluster como um container, e é o `buildx` que faz o `docker build` usar o BuildKit em vez do builder antigo (legacy), já depreciado. O Docker Desktop já vem com ele; uma instalação Linux só com o Engine (ex.: pacote `docker.io` do Ubuntu) geralmente não vem — verifique com `docker buildx version` e, se aparecer `unknown command`, instale separadamente (`sudo apt install docker-buildx` no Debian/Ubuntu). Nenhum comando de build muda depois de instalado; o `docker build` passa a usar o BuildKit sozinho.
 - **kind** (Kubernetes in Docker) — o cluster local.
 - **kubectl**
 - **Helm** (v3)
@@ -271,6 +271,7 @@ Todo repositório de backend e o frontend também rodam sozinhos via seu própri
 | `helm dependency update` não consegue resolver uma dependência (`../users-api/k8s` não encontrado, etc.) | Os seis repositórios irmãos precisam estar clonados ao lado de `orchestration/`, com seus nomes de pasta padrão — veja o [passo 1](#1-clonar-os-repositórios) |
 | `curl $BASE/...` dá connection refused | O controlador de ingress ainda não está pronto, ou o cluster kind não foi criado com os mapeamentos de porta em `kind/cluster-config.yaml` |
 | Um pod fica em `ImagePullBackOff`/`ErrImagePull` para `<service>:latest` (`pull access denied, repository does not exist`) | A imagem nunca foi construída nem carregada no cluster — veja o [passo 3](#3-construir-e-carregar-as-imagens); um `docker build` isolado não chega ao containerd do `kind`, só o `kind load docker-image` faz isso |
+| `docker build` imprime `DEPRECATED: The legacy builder is deprecated and will be removed in a future release` | O build ainda termina normalmente — é só um aviso, não uma falha — mas instale o plugin `buildx` (veja Pré-requisitos) para que ele use o BuildKit em vez do builder antigo |
 | O botão do Google nunca aparece | Esperado quando não há `Google:ClientId` configurado — `GET /api/users/config` reporta `googleSignInEnabled: false` e o frontend o esconde deliberadamente, em vez de mostrar um botão fadado a falhar |
 | Nenhum e-mail chega apesar de `EMAIL_PROVIDER=resend` | Verifique os logs do `notifications-api` e o Secret `resend-credentials` — uma `RESEND_API_KEY` ausente/inválida faz o envio falhar, e isso fica registrado na própria linha de `Notification` (visível via o endpoint admin de notificações), não é silenciosamente engolido |
 | Preços do catálogo aparecem em BRL mesmo com a alternância em inglês | `GET /api/quotations/usd-brl` retornou `409` — tanto o Frankfurter quanto o ExchangeRate-API estão inacessíveis (geralmente um cluster sem acesso de saída à internet); o frontend degrada para o BRL nativo por design, em vez de mostrar um preço quebrado — veja os logs do `catalog-api` para saber qual provedor falhou e por quê |

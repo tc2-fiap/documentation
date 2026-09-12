@@ -8,7 +8,7 @@ For what you're looking at architecturally, see [`ARCHITECTURE.en-US.md`](../arc
 
 ## Prerequisites
 
-- **Docker** — kind runs the cluster as a container.
+- **Docker**, with the **`buildx`** CLI plugin — kind runs the cluster as a container, and `buildx` is what makes `docker build` use BuildKit instead of the deprecated legacy builder. Docker Desktop bundles it already; a bare Linux Engine install (e.g. Ubuntu's `docker.io` package) usually doesn't — check with `docker buildx version` and, if it prints `unknown command`, install it separately (`sudo apt install docker-buildx` on Debian/Ubuntu). No build command changes once it's installed; `docker build` picks up BuildKit on its own.
 - **kind** (Kubernetes in Docker) — the local cluster.
 - **kubectl**
 - **Helm** (v3)
@@ -271,6 +271,7 @@ Every backend repo and the frontend also run alone via their own `docker-compose
 | `helm dependency update` can't resolve a dependency (`../users-api/k8s` not found, etc.) | The six sibling repos need to be cloned next to `orchestration/`, with their default folder names — see [step 1](#1-clone-the-repos) |
 | `curl $BASE/...` connection refused | The ingress controller isn't ready yet, or the kind cluster wasn't created with the port mappings in `kind/cluster-config.yaml` |
 | A pod is `ImagePullBackOff`/`ErrImagePull` for `<service>:latest` (`pull access denied, repository does not exist`) | The image was never built and loaded into the cluster — see [step 3](#3-build-and-load-the-images); a plain `docker build` alone doesn't reach `kind`'s containerd, only `kind load docker-image` does |
+| `docker build` prints `DEPRECATED: The legacy builder is deprecated and will be removed in a future release` | The build still completes — this is just a warning, not a failure — but install the `buildx` plugin (see Prerequisites) so it uses BuildKit instead |
 | Google button never appears | Expected with no `Google:ClientId` configured — `GET /api/users/config` reports `googleSignInEnabled: false` and the frontend hides it deliberately, rather than showing a button guaranteed to fail |
 | No email arrives despite `EMAIL_PROVIDER=resend` | Check `notifications-api` logs and the `resend-credentials` Secret — a missing/invalid `RESEND_API_KEY` fails the send and is recorded on the `Notification` row itself (visible via the admin notifications endpoint), not silently swallowed |
 | Catalog prices show in BRL even with the toggle set to English | `GET /api/quotations/usd-brl` returned `409` — both Frankfurter and ExchangeRate-API are unreachable (usually a cluster with no outbound internet access); the frontend degrades to native BRL by design rather than showing a broken price, see `catalog-api` logs for which provider failed and why |
