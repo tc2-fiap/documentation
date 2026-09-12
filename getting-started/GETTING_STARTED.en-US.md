@@ -225,7 +225,7 @@ Each is paginated (`page`/`pageSize`, capped at 100) and accepts optional filter
 open http://localhost   # or just navigate there
 ```
 
-Register or log in (a Google sign-in button appears automatically only if `Google:ClientId` is configured — see `notes.md` 28). Add one or more games to your cart from the catalog and review them on `/cart`, or use `Buy Now` on a single game — either way you land on the same `/checkout` confirmation page before anything is actually ordered: an itemized review (cover image, title, genre/platform per game) and the total in both BRL and USD. Confirming lands on the order page: the same line items, an order-and-payment-status box, the total, and — if a real PIX gateway is configured — a QR code to scan. The `Pending` → `Paid`/`Failed` transition appears the moment it happens, pushed over a Server-Sent Events connection rather than polled — unlike the `watch`-based `$ORDER_ID` loop above, which is just a convenient way to observe the same transition from the command line (`notes.md` 53). Logging in as the seeded admin surfaces two nav links: the all-orders view (and its per-order detail page, composing the same four order-scoped endpoints above into one screen) and "System Events" — the `/admin/events` page from the curl calls above, with dropdown filters for source, kind, and type plus a date range, and a click-to-expand raw JSON payload on every row.
+Register or log in (a Google sign-in button appears automatically only if `Google:ClientId` is configured — see `notes.md` 28). Add one or more games to your cart from the catalog and review them on `/cart`, or use `Buy Now` on a single game — either way you land on the same `/checkout` confirmation page before anything is actually ordered: an itemized review (cover image, title, genre/platform per game) and the total in both BRL and USD. Confirming lands on the order page: the same line items, an order-and-payment-status box, the total, and — if a real PIX gateway is configured — a QR code to scan. The `Pending` → `Paid`/`Failed` transition appears the moment it happens, pushed over a Server-Sent Events connection rather than polled — unlike the `watch`-based `$ORDER_ID` loop above, which is just a convenient way to observe the same transition from the command line (`notes.md` 53). Logging in as the seeded admin surfaces three nav links: the all-orders view (and its per-order detail page, composing the same four order-scoped endpoints above into one screen), "System Events" — the `/admin/events` page from the curl calls above, with dropdown filters for source, kind, and type plus a date range, and a click-to-expand raw JSON payload on every row — and "Manage Games" (`/admin/games`), a filterable table of the catalog with Edit and Delete on every row, plus a "Create game" button.
 
 The header carries an EN/PT toggle, visible even before logging in. Toggling to Portuguese always shows native BRL (e.g. `R$ 29,99`); toggling to English converts every catalog price to its USD equivalent using the live quotation, falling back to BRL if the rate lookup is ever unavailable — never a blank or broken price. The cart, checkout, and order pages always show both currencies together regardless of the toggle. The language choice itself persists across a reload (`notes.md` 35, 36, 39).
 
@@ -235,6 +235,27 @@ The header carries an EN/PT toggle, visible even before logging in. Toggling to 
 helm uninstall fiap-games
 kubectl delete pvc -n fiap-games --all   # drops Postgres data too — only if you want a truly clean next install
 kind delete cluster --name fiap-games
+```
+
+## Redeploying a single service after a code change
+
+The cluster from step 4 is already running — this is the loop for picking up new code in it, not a fresh install. Rebuild that one service's image, load it into `kind`'s containerd (same as [step 3](#3-build-and-load-the-images), just for one image), then force the Deployment to actually use it:
+
+```bash
+docker build -t frontend:latest frontend   # or any other service's own build command
+kind load docker-image frontend:latest --name fiap-games
+kubectl rollout restart deployment/frontend -n fiap-games
+kubectl rollout status deployment/frontend -n fiap-games
+```
+
+The `rollout restart` step is not optional. Every chart sets `imagePullPolicy: IfNotPresent` (`k8s/values.yaml`), so an already-running pod never notices that `kind load docker-image` replaced what `<service>:latest` points to in containerd — only a *new* pod re-evaluates the tag, and only `rollout restart` creates one. Skipping it silently leaves the old build running with no error anywhere.
+
+If every deployment in the namespace is scaled to zero (e.g. after an idle teardown that kept the release instead of uninstalling it), `rollout restart` has nothing to restart — scale back up first, then restart just the service you rebuilt:
+
+```bash
+kubectl scale deployment --all -n fiap-games --replicas=1
+kubectl rollout restart deployment/frontend -n fiap-games
+kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
 ```
 
 ## Running one service standalone

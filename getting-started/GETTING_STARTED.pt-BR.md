@@ -225,7 +225,7 @@ Cada um é paginado (`page`/`pageSize`, limitado a 100) e aceita filtros opciona
 open http://localhost   # ou apenas navegue até lá
 ```
 
-Cadastre-se ou faça login (um botão de login com Google aparece automaticamente só se `Google:ClientId` estiver configurado — ver `notes.md` 28). Adicione um ou mais jogos ao carrinho a partir do catálogo e revise em `/cart`, ou use `Comprar agora` em um único jogo — dos dois jeitos você chega na mesma página de confirmação `/checkout` antes de qualquer pedido ser de fato criado: uma revisão item a item (capa, título, gênero/plataforma de cada jogo) e o total em BRL e em USD. Ao confirmar, você chega na página do pedido: os mesmos itens, uma caixa de status do pedido e do pagamento, o total, e — se um gateway PIX real estiver configurado — um QR code para escanear. A transição `Pending` → `Paid`/`Failed` aparece no instante em que acontece, entregue por uma conexão Server-Sent Events em vez de consultada por polling — diferente do laço `watch` com `$ORDER_ID` acima, que é só uma forma conveniente de observar essa mesma transição pela linha de comando (`notes.md` 53). Ao entrar como o admin semeado, aparecem dois links de navegação: a visão de todos os pedidos (e sua página de detalhe por pedido, que compõe os mesmos quatro endpoints restritos a um pedido acima em uma única tela) e "Eventos do Sistema" — a página `/admin/events` das chamadas curl acima, com filtros em dropdown por origem, tipo e categoria, mais um intervalo de datas, e um payload JSON bruto expansível em cada linha ao clicar.
+Cadastre-se ou faça login (um botão de login com Google aparece automaticamente só se `Google:ClientId` estiver configurado — ver `notes.md` 28). Adicione um ou mais jogos ao carrinho a partir do catálogo e revise em `/cart`, ou use `Comprar agora` em um único jogo — dos dois jeitos você chega na mesma página de confirmação `/checkout` antes de qualquer pedido ser de fato criado: uma revisão item a item (capa, título, gênero/plataforma de cada jogo) e o total em BRL e em USD. Ao confirmar, você chega na página do pedido: os mesmos itens, uma caixa de status do pedido e do pagamento, o total, e — se um gateway PIX real estiver configurado — um QR code para escanear. A transição `Pending` → `Paid`/`Failed` aparece no instante em que acontece, entregue por uma conexão Server-Sent Events em vez de consultada por polling — diferente do laço `watch` com `$ORDER_ID` acima, que é só uma forma conveniente de observar essa mesma transição pela linha de comando (`notes.md` 53). Ao entrar como o admin semeado, aparecem três links de navegação: a visão de todos os pedidos (e sua página de detalhe por pedido, que compõe os mesmos quatro endpoints restritos a um pedido acima em uma única tela), "Eventos do Sistema" — a página `/admin/events` das chamadas curl acima, com filtros em dropdown por origem, tipo e categoria, mais um intervalo de datas, e um payload JSON bruto expansível em cada linha ao clicar — e "Gerenciar Jogos" (`/admin/games`), uma tabela filtrável do catálogo com Editar e Excluir em cada linha, mais um botão "Criar jogo".
 
 O cabeçalho tem uma alternância EN/PT, visível mesmo antes de fazer login. Trocar para português sempre mostra o BRL nativo (ex.: `R$ 29,99`); trocar para inglês converte todo preço do catálogo para o equivalente em USD usando a cotação ao vivo, voltando para BRL se a cotação estiver indisponível — nunca um preço em branco ou quebrado. O carrinho, o checkout e a página do pedido sempre mostram as duas moedas juntas, independente da alternância. A escolha de idioma em si persiste entre recarregamentos (`notes.md` 35, 36, 39).
 
@@ -235,6 +235,27 @@ O cabeçalho tem uma alternância EN/PT, visível mesmo antes de fazer login. Tr
 helm uninstall fiap-games
 kubectl delete pvc -n fiap-games --all   # também apaga os dados do Postgres — só se você quiser uma próxima instalação verdadeiramente limpa
 kind delete cluster --name fiap-games
+```
+
+## Reimplantando um serviço depois de uma alteração de código
+
+O cluster do passo 4 já está rodando — este é o ciclo para levar código novo até ele, não uma instalação do zero. Reconstrua a imagem daquele serviço, carregue-a no containerd do `kind` (igual ao [passo 3](#3-construir-e-carregar-as-imagens), só que para uma imagem) e force o Deployment a de fato usá-la:
+
+```bash
+docker build -t frontend:latest frontend   # ou o comando de build de qualquer outro serviço
+kind load docker-image frontend:latest --name fiap-games
+kubectl rollout restart deployment/frontend -n fiap-games
+kubectl rollout status deployment/frontend -n fiap-games
+```
+
+O passo `rollout restart` não é opcional. Todo chart define `imagePullPolicy: IfNotPresent` (`k8s/values.yaml`), então um pod já em execução nunca percebe que o `kind load docker-image` substituiu o que `<service>:latest` aponta no containerd — só um pod *novo* reavalia a tag, e só o `rollout restart` cria um. Pular esse passo deixa a build antiga rodando silenciosamente, sem nenhum erro em lugar nenhum.
+
+Se todos os deployments do namespace estiverem escalados para zero (por exemplo, depois de um desligamento por ociosidade que manteve o release em vez de desinstalá-lo), o `rollout restart` não tem o que reiniciar — escale de volta primeiro, depois reinicie só o serviço que você reconstruiu:
+
+```bash
+kubectl scale deployment --all -n fiap-games --replicas=1
+kubectl rollout restart deployment/frontend -n fiap-games
+kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
 ```
 
 ## Rodando um serviço isolado
