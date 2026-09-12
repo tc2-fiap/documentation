@@ -12,7 +12,7 @@ flowchart LR
     Ingress -->|"/api/payments"| Payments["payments-api"]
     Ingress -->|"/api/notifications"| Notifications["notifications-api"]
 
-    Users -.->|consulta de preço, HTTP síncrono| Catalog
+    Orders -.->|consulta de preço, HTTP síncrono| Catalog
     Catalog -.->|"cotação USD/BRL, cacheada"| Frankfurter[("Frankfurter /\nExchangeRate-API")]
     Orders -.->|"OrderPlacedEvent"| RabbitMQ(("RabbitMQ"))
     Payments -.->|"PaymentProcessedEvent"| RabbitMQ
