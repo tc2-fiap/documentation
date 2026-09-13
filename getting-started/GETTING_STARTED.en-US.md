@@ -135,13 +135,18 @@ BASE=http://localhost
 open http://localhost   # or just navigate there
 ```
 
-Register or log in with one of the seeded accounts (Admin, to see the admin screens right away; Player, to skip registration) — a Google sign-in button appears automatically only if `Google:ClientId` is configured — see `notes.md` 28. Add one or more games to your cart from the catalog and review them on `/cart`, or use `Buy Now` on a single game — either way you land on the same `/checkout` confirmation page before anything is actually ordered: an itemized review (cover image, title, genre/platform per game) and the total in both BRL and USD. Confirming lands on the order page: the same line items, an order-and-payment-status box, the total, and — if a real PIX gateway is configured — a QR code to scan. The `Pending` → `Paid`/`Failed` transition appears the moment it happens, pushed over a Server-Sent Events connection rather than polled (`notes.md` 53). Logging in as the seeded admin surfaces four nav links: the all-orders view (and its per-order detail page), "System Events" (`/admin/events`) — dropdown filters for source, kind, and type plus a date range, and a click-to-expand raw JSON payload on every row — "Manage Games" (`/admin/games`), a filterable table of the catalog with Edit and Delete on every row, plus a "Create game" button — and "System Health" (`/admin/system`), a live pod table and every service's `/version`.
+1. Register or log in with one of the seeded accounts — Admin, to see the admin screens right away, or Player, to skip registration. A Google sign-in button appears automatically only if `Google:ClientId` is configured (`notes.md` 28).
+2. Add one or more games to your cart from the catalog and review them on `/cart`, or use `Buy Now` directly on a single game.
+3. Confirm on `/checkout` — either way you land on the same page, before anything is actually ordered: an itemized review (cover image, title, genre/platform per game) and the total in both BRL and USD.
+4. Watch the order page: the same line items, an order-and-payment-status box, the total, and — if a real PIX gateway is configured — a QR code to scan. The `Pending` → `Paid`/`Failed` transition appears the moment it happens, pushed over a Server-Sent Events connection rather than polled (`notes.md` 53).
+5. Logged in as the seeded admin, explore the four nav links: the all-orders view (with a per-order detail page), "System Events" (`/admin/events` — dropdown filters for source, kind, and type plus a date range, a click-to-expand raw JSON payload on every row), "Manage Games" (`/admin/games` — a filterable table with Edit, Delete, and a "Create game" button), and "System Health" (`/admin/system` — a live pod table and every service's `/version`).
+6. Toggle the language in the header (EN/PT, visible even before logging in). Portuguese always shows native BRL (e.g. `R$ 29,99`); English converts every catalog price to its USD equivalent using the live quotation, falling back to BRL if the rate lookup is ever unavailable — never a blank or broken price. The cart, checkout, and order pages always show both currencies together regardless of the toggle. The language choice persists across a reload (`notes.md` 35, 36, 39).
 
-The header carries an EN/PT toggle, visible even before logging in. Toggling to Portuguese always shows native BRL (e.g. `R$ 29,99`); toggling to English converts every catalog price to its USD equivalent using the live quotation, falling back to BRL if the rate lookup is ever unavailable — never a blank or broken price. The cart, checkout, and order pages always show both currencies together regardless of the toggle. The language choice itself persists across a reload (`notes.md` 35, 36, 39).
+### In the terminal
 
 The rest of this section repeats the same flow directly against the API (`curl`), call by call — useful for seeing exactly what each screen fires under the hood, and for what the UI doesn't expose (the full audit trail, the pod listing).
 
-### Register and log in
+#### Register and log in
 
 `POST /api/users/register` — and the frontend's `/register` page behind it — always creates a `Player` account; there is no way to self-register as `Admin`. The only way to get an Admin account is to already have one and promote someone else via `PUT /api/users/{id}/role` (admin-only) — which is why `users-api` already seeds one Admin (and, for convenience, one Player) account on first startup:
 
@@ -180,7 +185,7 @@ Watch `kubectl logs -n fiap-games deploy/notifications-api -f` in another termin
 
 From here on, `$TOKEN` can be either the seeded Player's or the freshly-registered account's — either works for the rest of this walkthrough.
 
-### Browse the catalog and buy a game
+#### Browse the catalog and buy a game
 
 `catalog-api` seeds itself with 30 games (mostly real ones, with real Steam cover art and realistic BRL prices) the first time it starts against an empty database, so there's already something to browse without creating anything by hand — including one fictional one, "Corrupted Save: QA Edition," deliberately priced to always fail at payment (see below). In the browser this goes through a cart and a checkout confirmation step (see [In a browser](#in-a-browser) above); against the API directly, one call places the order:
 
@@ -195,7 +200,7 @@ ORDER_ID=$(echo $ORDER | jq -r '.id')
 
 Note the request body carries only `gameIds` — a list, since a single checkout can place one order for several games (a cart, in the browser) — and never a price; each item's price is read from `catalog-api` and snapshotted onto the order (`instructions.md` §6). Try the same `POST /api/orders` call again with the same `$GAME_ID` — it now returns `409 Conflict` ("You already own or have a pending order for: `$GAME_ID`"), since a user can't own the same game twice. That's enforced two ways: an application-level check for a friendly error message, and — the actual, race-proof guarantee — a partial unique index on Postgres itself (`notes.md` 51, 52). Either way it only unblocks again if that order later settles `Failed`.
 
-### Watch `Pending` become `Paid`
+#### Watch `Pending` become `Paid`
 
 ```bash
 watch -n1 "curl -s $BASE/api/orders/$ORDER_ID -H \"Authorization: Bearer $TOKEN\" | jq '.status'"
@@ -209,7 +214,7 @@ curl -s $BASE/api/library -H "Authorization: Bearer $TOKEN" | jq
 
 To see a rejected purchase instead, buy a game priced above `999.00`, or one whose price ends in `.13` — the order settles to `Failed` and never appears in the library. The seed already includes a game built exactly for this: `"Corrupted Save: QA Edition"`, priced at `49.13`.
 
-### USD quotation and your own checkout
+#### USD quotation and your own checkout
 
 ```bash
 curl -s $BASE/api/quotations/usd-brl -H "Authorization: Bearer $TOKEN" | jq
@@ -223,7 +228,7 @@ curl -s $BASE/api/payments/checkout/$ORDER_ID -H "Authorization: Bearer $TOKEN" 
 
 Unlike the admin-only `/api/payments/{orderId}` below, this route is for the order's own owner — it returns the payment's status, gateway, price, and (only when a real PIX gateway produced one) a QR code and copy-paste code, never the full raw gateway payload. With the default `simulated` gateway, `pixCopyPasteCode`/`pixQrCodeBase64` are both `null` — there's nothing to scan, the order just settles on its own (`notes.md` 40).
 
-### Admin login and the cross-service audit trail
+#### Admin login and the cross-service audit trail
 
 The seeded Admin account (the same one from the table in "Register and log in" above) can see every user's orders and the full lifecycle of any one of them:
 

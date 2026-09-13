@@ -135,13 +135,18 @@ BASE=http://localhost
 open http://localhost   # ou apenas navegue até lá
 ```
 
-Cadastre-se ou faça login com uma das contas semeadas (a Admin, pra ver as telas de admin direto; a Player, pra pular o cadastro) — um botão de login com Google aparece automaticamente só se `Google:ClientId` estiver configurado — ver `notes.md` 28. Adicione um ou mais jogos ao carrinho a partir do catálogo e revise em `/cart`, ou use `Comprar agora` em um único jogo — dos dois jeitos você chega na mesma página de confirmação `/checkout` antes de qualquer pedido ser de fato criado: uma revisão item a item (capa, título, gênero/plataforma de cada jogo) e o total em BRL e em USD. Ao confirmar, você chega na página do pedido: os mesmos itens, uma caixa de status do pedido e do pagamento, o total, e — se um gateway PIX real estiver configurado — um QR code para escanear. A transição `Pending` → `Paid`/`Failed` aparece no instante em que acontece, entregue por uma conexão Server-Sent Events em vez de consultada por polling (`notes.md` 53). Ao entrar como o admin semeado, aparecem quatro links de navegação: a visão de todos os pedidos (e sua página de detalhe por pedido), "Eventos do Sistema" (`/admin/events`) — filtros em dropdown por origem, tipo e categoria, mais um intervalo de datas, e um payload JSON bruto expansível em cada linha ao clicar — "Gerenciar Jogos" (`/admin/games`), uma tabela filtrável do catálogo com Editar e Excluir em cada linha, mais um botão "Criar jogo" — e "Saúde do Sistema" (`/admin/system`), pods ao vivo e o `/version` de cada serviço.
+1. Cadastre-se ou faça login com uma das contas semeadas — Admin, pra ver as telas de admin direto, ou Player, pra pular o cadastro. Um botão de login com Google aparece automaticamente só se `Google:ClientId` estiver configurado (`notes.md` 28).
+2. Adicione um ou mais jogos ao carrinho a partir do catálogo e revise em `/cart`, ou use `Comprar agora` direto em um único jogo.
+3. Confirme em `/checkout` — dos dois jeitos você chega na mesma página, antes de qualquer pedido ser de fato criado: uma revisão item a item (capa, título, gênero/plataforma de cada jogo) e o total em BRL e em USD.
+4. Acompanhe a página do pedido: os mesmos itens, uma caixa de status do pedido e do pagamento, o total, e — se um gateway PIX real estiver configurado — um QR code para escanear. A transição `Pending` → `Paid`/`Failed` aparece no instante em que acontece, entregue por uma conexão Server-Sent Events em vez de consultada por polling (`notes.md` 53).
+5. Logado como o admin semeado, explore os quatro links de navegação: a visão de todos os pedidos (com página de detalhe por pedido), "Eventos do Sistema" (`/admin/events` — filtros em dropdown por origem, tipo e categoria, intervalo de datas, payload JSON bruto expansível em cada linha), "Gerenciar Jogos" (`/admin/games` — tabela filtrável com Editar, Excluir e um botão "Criar jogo") e "Saúde do Sistema" (`/admin/system` — pods ao vivo e o `/version` de cada serviço).
+6. Alterne o idioma no cabeçalho (EN/PT, visível mesmo antes de fazer login). Português sempre mostra o BRL nativo (ex.: `R$ 29,99`); inglês converte todo preço do catálogo para o equivalente em USD usando a cotação ao vivo, voltando para BRL se a cotação estiver indisponível — nunca um preço em branco ou quebrado. O carrinho, o checkout e a página do pedido sempre mostram as duas moedas juntas, independente da alternância. A escolha de idioma persiste entre recarregamentos (`notes.md` 35, 36, 39).
 
-O cabeçalho tem uma alternância EN/PT, visível mesmo antes de fazer login. Trocar para português sempre mostra o BRL nativo (ex.: `R$ 29,99`); trocar para inglês converte todo preço do catálogo para o equivalente em USD usando a cotação ao vivo, voltando para BRL se a cotação estiver indisponível — nunca um preço em branco ou quebrado. O carrinho, o checkout e a página do pedido sempre mostram as duas moedas juntas, independente da alternância. A escolha de idioma em si persiste entre recarregamentos (`notes.md` 35, 36, 39).
+### Pelo terminal
 
 O restante desta seção repete o mesmo fluxo direto pela API (`curl`), chamada a chamada — útil pra ver exatamente o que cada tela dispara por trás dos panos, e para o que a UI não expõe (a trilha de auditoria completa, a listagem de pods).
 
-### Cadastrar e fazer login
+#### Cadastrar e fazer login
 
 `POST /api/users/register` — e a página `/register` do frontend por trás dele — sempre cria uma conta com a role `Player`; não existe um jeito de se auto-cadastrar como `Admin`. A única forma de conseguir uma conta Admin é já ter uma e promover outra pessoa via `PUT /api/users/{id}/role` (admin-only) — por isso o `users-api` já semeia uma conta Admin (e, por conveniência, uma Player) na primeira subida:
 
@@ -180,7 +185,7 @@ Acompanhe `kubectl logs -n fiap-games deploy/notifications-api -f` em outro term
 
 Daqui em diante, `$TOKEN` pode ser tanto o da conta Player semeada quanto o da conta recém-registrada — qualquer uma serve para o resto deste passo a passo.
 
-### Navegar no catálogo e comprar um jogo
+#### Navegar no catálogo e comprar um jogo
 
 O `catalog-api` se auto-semeia com 30 jogos (a maioria reais, com capas reais do Steam e preços realistas em BRL) na primeira vez que inicia contra um banco vazio, então já existe algo para navegar sem criar nada manualmente — inclusive um jogo fictício, "Corrupted Save: QA Edition", propositalmente precificado em `49.13` para sempre falhar no pagamento (veja a seção abaixo). No navegador isso passa por um carrinho e uma etapa de confirmação de checkout (veja [Pelo navegador](#pelo-navegador) acima); direto na API, uma única chamada cria o pedido:
 
@@ -195,7 +200,7 @@ ORDER_ID=$(echo $ORDER | jq -r '.id')
 
 Note que o corpo da requisição carrega apenas `gameIds` — uma lista, já que um único checkout pode gerar um pedido com vários jogos (um carrinho, no navegador) — e nunca um preço; o preço de cada item é lido do `catalog-api` e registrado como snapshot no pedido (`instructions.md` §6). Tente a mesma chamada `POST /api/orders` de novo com o mesmo `$GAME_ID` — agora ela retorna `409 Conflict` ("You already own or have a pending order for: `$GAME_ID`"), já que um usuário não pode possuir o mesmo jogo duas vezes. Isso é garantido de duas formas: uma checagem na aplicação, que gera essa mensagem amigável, e — a garantia de fato, à prova de corrida — um índice único parcial no próprio Postgres (`notes.md` 51, 52). De qualquer forma, isso só libera de novo se aquele pedido se resolver como `Failed`.
 
-### Observar o `Pending` virar `Paid`
+#### Observar o `Pending` virar `Paid`
 
 ```bash
 watch -n1 "curl -s $BASE/api/orders/$ORDER_ID -H \"Authorization: Bearer $TOKEN\" | jq '.status'"
@@ -209,7 +214,7 @@ curl -s $BASE/api/library -H "Authorization: Bearer $TOKEN" | jq
 
 Para ver uma compra rejeitada, compre um jogo com preço acima de `999.00`, ou cujo preço termine em `.13` — o pedido se resolve como `Failed` e nunca aparece na biblioteca. O seed já inclui um jogo pronto exatamente para isso: `"Corrupted Save: QA Edition"`, precificado em `49.13`.
 
-### Cotação em USD e o seu próprio checkout
+#### Cotação em USD e o seu próprio checkout
 
 ```bash
 curl -s $BASE/api/quotations/usd-brl -H "Authorization: Bearer $TOKEN" | jq
@@ -223,7 +228,7 @@ curl -s $BASE/api/payments/checkout/$ORDER_ID -H "Authorization: Bearer $TOKEN" 
 
 Diferente da rota admin-only `/api/payments/{orderId}` abaixo, esta rota é para o próprio dono do pedido — ela retorna o status do pagamento, o gateway, o preço e (só quando um gateway PIX real gerou um) um QR code e o código copia-e-cola, nunca o payload bruto completo do gateway. Com o gateway padrão `simulated`, `pixCopyPasteCode`/`pixQrCodeBase64` são ambos `null` — não há nada para escanear, o pedido apenas se resolve sozinho (`notes.md` 40).
 
-### Login de admin e a trilha de auditoria entre serviços
+#### Login de admin e a trilha de auditoria entre serviços
 
 A conta Admin semeada (a mesma da tabela na seção "Cadastrar e fazer login" acima) pode ver os pedidos de todos os usuários e o ciclo de vida completo de qualquer um deles:
 
