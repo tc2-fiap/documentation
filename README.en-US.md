@@ -76,6 +76,10 @@ A few that differ from the obvious reading of the requirements, each argued in `
 - **Google sign-in without an OAuth redirect flow.** ID-token verification needs no public callback URL, sidestepping the tunnel problem that keeps the real payment gateway optional.
 - **Documentation lives in its own repo, published separately and never cloned alongside the eight runtime repos** — its narrative layer (this file, `OVERVIEW.md`, `ARCHITECTURE.md`, `GETTING_STARTED.md`, `TEST_COVERAGE.md`, every repo's `README.md`) is bilingual English/Portuguese; the spec and decision record stay English-only (`notes.md` 34, 35, 44, 50).
 
+## What's next
+
+[`next-phase/next-phase.md`](next-phase/next-phase.md) is where pending, not-yet-built work is planned before it starts — currently: making the already-built payment webhooks and Resend email actually live in production, a cheap real-environment deployment strategy, and splitting the `Admin` role into `Manager` (people/purchases) and `Admin` (system/ops). None of it is implemented yet; it moves into `notes.md` and the rest of this repo's docs the same way `features/` already does, once it actually ships. English only, same as `features/` and `spec/`.
+
 ## Context
 
 Academic project (FIAP). The original requirements brief is in Portuguese; this documentation is bilingual (English/Portuguese) for its narrative layer, English-only for the technical spec and decision record.

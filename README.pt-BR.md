@@ -76,6 +76,10 @@ Algumas que divergem da leitura óbvia dos requisitos, cada uma justificada em `
 - **Login com Google sem um fluxo de redirecionamento OAuth.** A verificação de ID token não precisa de uma URL pública de callback, contornando o mesmo problema de túnel que mantém o gateway de pagamento real como opcional.
 - **A documentação vive em seu próprio repositório, publicado separadamente e nunca clonado junto com os oito repositórios de execução** — sua camada narrativa (este arquivo, `OVERVIEW.md`, `ARCHITECTURE.md`, `GETTING_STARTED.md`, `TEST_COVERAGE.md`, o `README.md` de cada repositório) é bilíngue inglês/português; a especificação e o registro de decisões permanecem somente em inglês (`notes.md` 34, 35, 44, 50).
 
+## Próxima fase
+
+[`next-phase/next-phase.md`](next-phase/next-phase.md) é onde o trabalho pendente, ainda não construído, é planejado antes de começar — hoje: colocar os webhooks de pagamento e o e-mail via Resend (já construídos) de fato em produção, uma estratégia barata de implantação em um ambiente real, e separar a role `Admin` em `Manager` (pessoas/compras) e `Admin` (sistema/operações). Nada disso está implementado ainda; migra para o `notes.md` e para o resto da documentação deste repositório do mesmo jeito que `features/` já funciona, assim que for de fato entregue. Somente em inglês, igual `features/` e `spec/`.
+
 ## Contexto
 
 Projeto acadêmico (FIAP). O briefing original de requisitos está em português; esta documentação é bilíngue (inglês/português) em sua camada narrativa, e somente em inglês para a especificação técnica e o registro de decisões.
