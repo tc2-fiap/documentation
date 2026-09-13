@@ -22,7 +22,7 @@ Necessário apenas se você também quiser rodar um único serviço de forma ind
 Este projeto está dividido em nove repositórios independentes no GitHub, sob [`github.com/tc2-fiap`](https://github.com/tc2-fiap) — veja [`../README.pt-BR.md`](../README.pt-BR.md) para a visão completa e o que cada um possui. Para rodar o sistema em si, só oito são necessários: os seis serviços de backend, o `frontend` e o `orchestration` (`documentation` — este repositório — e o `base-project`, o monólito de referência à parte, não fazem parte do sistema em execução).
 
 O chart Helm do `orchestration` espera que os outros sete estejam como **diretórios irmãos** no disco — as dependências do seu `Chart.yaml` são caminhos relativos literais (`file://../users-api/k8s`, e assim por diante para cada serviço), não uma busca em um registro. Clone os oito em um diretório pai vazio, mantendo os nomes de pasta padrão que o `git clone` já usa:
-kk
+
 ```bash
 mkdir fiap-games && cd fiap-games
 for repo in users-api catalog-api orders-api payments-api notifications-api platform-api frontend orchestration; do
