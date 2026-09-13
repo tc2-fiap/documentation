@@ -237,26 +237,9 @@ kubectl delete pvc -n fiap-games --all   # também apaga os dados do Postgres �
 kind delete cluster --name fiap-games
 ```
 
-## Reimplantando um serviço depois de uma alteração de código
+## Levando uma alteração de código até o cluster em execução
 
-O cluster do passo 4 já está rodando — este é o ciclo para levar código novo até ele, não uma instalação do zero. Reconstrua a imagem daquele serviço, carregue-a no containerd do `kind` (igual ao [passo 3](#3-construir-e-carregar-as-imagens), só que para uma imagem) e force o Deployment a de fato usá-la:
-
-```bash
-docker build -t frontend:latest frontend   # ou o comando de build de qualquer outro serviço
-kind load docker-image frontend:latest --name fiap-games
-kubectl rollout restart deployment/frontend -n fiap-games
-kubectl rollout status deployment/frontend -n fiap-games
-```
-
-O passo `rollout restart` não é opcional. Todo chart define `imagePullPolicy: IfNotPresent` (`k8s/values.yaml`), então um pod já em execução nunca percebe que o `kind load docker-image` substituiu o que `<service>:latest` aponta no containerd — só um pod *novo* reavalia a tag, e só o `rollout restart` cria um. Pular esse passo deixa a build antiga rodando silenciosamente, sem nenhum erro em lugar nenhum.
-
-Se todos os deployments do namespace estiverem escalados para zero (por exemplo, depois de um desligamento por ociosidade que manteve o release em vez de desinstalá-lo), o `rollout restart` não tem o que reiniciar — escale de volta primeiro, depois reinicie só o serviço que você reconstruiu:
-
-```bash
-kubectl scale deployment --all -n fiap-games --replicas=1
-kubectl rollout restart deployment/frontend -n fiap-games
-kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
-```
+Coberto em [`technical-assessment/DEPLOY_VERIFICATION.pt-BR.md`](../technical-assessment/DEPLOY_VERIFICATION.pt-BR.md) — reconstruir, `kind load docker-image`, `kubectl rollout restart`, o caso de recuperação quando tudo está escalado a zero e, mais importante, como verificar de verdade que a reconstrução chegou ao sistema em execução em vez de simplesmente assumir isso.
 
 ## Rodando um serviço isolado
 

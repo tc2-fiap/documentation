@@ -48,6 +48,7 @@ This repo holds every spec, decision record, and narrative document for the proj
 | [`OVERVIEW.en-US.md`](context/OVERVIEW.en-US.md) / [`.pt-BR`](context/OVERVIEW.pt-BR.md) | Why this system exists and what it delivers | English, Português |
 | [`ARCHITECTURE.en-US.md`](architecture/ARCHITECTURE.en-US.md) / [`.pt-BR`](architecture/ARCHITECTURE.pt-BR.md) | How it was actually built — solution architecture, event-flow diagrams, per-service breakdown, deployment | English, Português |
 | [`GETTING_STARTED.en-US.md`](getting-started/GETTING_STARTED.en-US.md) / [`.pt-BR`](getting-started/GETTING_STARTED.pt-BR.md) | Prerequisites, cluster bring-up, verification, demo walkthrough | English, Português |
+| [`DEPLOY_VERIFICATION.en-US.md`](technical-assessment/DEPLOY_VERIFICATION.en-US.md) / [`.pt-BR`](technical-assessment/DEPLOY_VERIFICATION.pt-BR.md) | Redeploying a single service after a code change, and how to actually verify the rebuild reached the running cluster (not just assume it did) | English, Português |
 | [`TEST_COVERAGE.en-US.md`](test-coverage/TEST_COVERAGE.en-US.md) / [`.pt-BR`](test-coverage/TEST_COVERAGE.pt-BR.md) | Measured per-service line coverage | English, Português |
 | [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Brand identity — color tokens, wordmark, logo mark, favicon — applied verbatim in the frontend, kept in the one repo that uses it (`notes.md` 44) | English only |
 

@@ -237,26 +237,9 @@ kubectl delete pvc -n fiap-games --all   # drops Postgres data too — only if y
 kind delete cluster --name fiap-games
 ```
 
-## Redeploying a single service after a code change
+## Picking up a code change in the running cluster
 
-The cluster from step 4 is already running — this is the loop for picking up new code in it, not a fresh install. Rebuild that one service's image, load it into `kind`'s containerd (same as [step 3](#3-build-and-load-the-images), just for one image), then force the Deployment to actually use it:
-
-```bash
-docker build -t frontend:latest frontend   # or any other service's own build command
-kind load docker-image frontend:latest --name fiap-games
-kubectl rollout restart deployment/frontend -n fiap-games
-kubectl rollout status deployment/frontend -n fiap-games
-```
-
-The `rollout restart` step is not optional. Every chart sets `imagePullPolicy: IfNotPresent` (`k8s/values.yaml`), so an already-running pod never notices that `kind load docker-image` replaced what `<service>:latest` points to in containerd — only a *new* pod re-evaluates the tag, and only `rollout restart` creates one. Skipping it silently leaves the old build running with no error anywhere.
-
-If every deployment in the namespace is scaled to zero (e.g. after an idle teardown that kept the release instead of uninstalling it), `rollout restart` has nothing to restart — scale back up first, then restart just the service you rebuilt:
-
-```bash
-kubectl scale deployment --all -n fiap-games --replicas=1
-kubectl rollout restart deployment/frontend -n fiap-games
-kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
-```
+Covered in [`technical-assessment/DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md) — rebuild, `kind load docker-image`, `kubectl rollout restart`, the scaled-to-zero recovery case, and (the part that matters more) how to actually verify the rebuild reached the running system instead of assuming it did.
 
 ## Running one service standalone
 

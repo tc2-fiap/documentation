@@ -48,6 +48,7 @@ Este repositório reúne toda especificação, registro de decisões e documenta
 | [`OVERVIEW.en-US.md`](context/OVERVIEW.en-US.md) / [`.pt-BR`](context/OVERVIEW.pt-BR.md) | Por que este sistema existe e o que ele entrega | Inglês, Português |
 | [`ARCHITECTURE.en-US.md`](architecture/ARCHITECTURE.en-US.md) / [`.pt-BR`](architecture/ARCHITECTURE.pt-BR.md) | Como foi efetivamente construído — arquitetura da solução, diagramas de fluxo de eventos, detalhamento por serviço, implantação | Inglês, Português |
 | [`GETTING_STARTED.en-US.md`](getting-started/GETTING_STARTED.en-US.md) / [`.pt-BR`](getting-started/GETTING_STARTED.pt-BR.md) | Pré-requisitos, subida do cluster, verificação, passo a passo de demonstração | Inglês, Português |
+| [`DEPLOY_VERIFICATION.en-US.md`](technical-assessment/DEPLOY_VERIFICATION.en-US.md) / [`.pt-BR`](technical-assessment/DEPLOY_VERIFICATION.pt-BR.md) | Reimplantar um serviço depois de uma alteração de código, e como verificar de verdade que a reconstrução chegou ao cluster em execução (não apenas assumir isso) | Inglês, Português |
 | [`TEST_COVERAGE.en-US.md`](test-coverage/TEST_COVERAGE.en-US.md) / [`.pt-BR`](test-coverage/TEST_COVERAGE.pt-BR.md) | Cobertura de linhas medida, por serviço | Inglês, Português |
 | [`frontend/design/`](https://github.com/tc2-fiap/frontend/tree/main/design) | Identidade visual — tokens de cor, marca, logomarca, favicon — aplicados literalmente no frontend, mantidos no único repositório que os usa (`notes.md` 44) | Somente inglês |
 
