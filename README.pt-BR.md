@@ -6,6 +6,11 @@ Um monólito modular em .NET, rearquitetado como um sistema distribuído: seis s
 
 Este repositório — `documentation` — reúne a especificação, o registro de decisões e a documentação narrativa do projeto. Ele é lido no GitHub, não clonado: diferente dos oito repositórios abaixo, ele nunca é clonado como irmão para rodar nada, já que nada na execução do sistema precisa dele em disco (`notes.md` 50).
 
+## Por onde começar
+
+- **Quer rodar o sistema?** [`GETTING_STARTED.pt-BR.md`](getting-started/GETTING_STARTED.pt-BR.md) ([English](getting-started/GETTING_STARTED.en-US.md)) — pré-requisitos, subida do cluster, verificação, um passo a passo completo de compra pela linha de comando e no navegador.
+- **Quer entender o sistema primeiro?** [`ARCHITECTURE.pt-BR.md`](architecture/ARCHITECTURE.pt-BR.md) ([English](architecture/ARCHITECTURE.en-US.md)) — como foi efetivamente construído, fluxos de eventos, detalhamento por serviço, implantação — não precisa de nenhum cluster rodando pra ler.
+
 ## O sistema distribuído
 
 Oito repositórios independentes sob [`github.com/tc2-fiap`](https://github.com/tc2-fiap), cada um clonado como irmão lado a lado dos *outros sete* — nunca deste repositório. Cada um tem seu próprio `README.md` bilíngue.

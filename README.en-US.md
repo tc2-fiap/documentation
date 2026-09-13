@@ -6,6 +6,11 @@ A .NET modular monolith, rearchitected into a distributed system: six backend se
 
 This repo — `documentation` — is the project's specs, decision record, and narrative documentation. It's read on GitHub, not cloned: unlike the eight repos below, it's never checked out as a sibling to run anything, since nothing about running the system needs it on disk (`notes.md` 50).
 
+## Where to start
+
+- **Want to run it?** [`GETTING_STARTED.en-US.md`](getting-started/GETTING_STARTED.en-US.md) ([pt-BR](getting-started/GETTING_STARTED.pt-BR.md)) — prerequisites, cluster bring-up, verification, a full purchase walkthrough from the command line and in a browser.
+- **Want to understand it first?** [`ARCHITECTURE.en-US.md`](architecture/ARCHITECTURE.en-US.md) ([pt-BR](architecture/ARCHITECTURE.pt-BR.md)) — how it's actually built, event flows, per-service breakdown, deployment — no cluster required to read it.
+
 ## The distributed system
 
 Eight independent repos under [`github.com/tc2-fiap`](https://github.com/tc2-fiap), each cloned as a flat sibling of the *other seven* — never of this repo. Every one has its own bilingual `README.md`.
