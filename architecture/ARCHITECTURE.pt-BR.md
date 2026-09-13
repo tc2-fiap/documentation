@@ -12,13 +12,14 @@ catalog-api/          # o catálogo de jogos — apenas dado de referência de p
 orders-api/           # o agregado Order, o ciclo de vida da compra, a biblioteca, o log de auditoria
 payments-api/         # abstração do gateway de pagamento, registros de pagamento persistidos
 notifications-api/    # e-mails de boas-vindas, confirmações de compra (console ou Resend)
+platform-api/         # introspecção de pods do Kubernetes para o painel de saúde do sistema (admin) — sem banco de dados, sem schema
 frontend/             # React + Vite — o único serviço acessado diretamente pelo navegador; também guarda o design/, os ativos de marca
 orchestration/        # Postgres, RabbitMQ, Ingress, chart Helm guarda-chuva
 ```
 
-Sete repositórios independentes sob [`github.com/tc2-fiap`](https://github.com/tc2-fiap), clonados como irmãos, lado a lado — veja `GETTING_STARTED.md` §1. O `documentation` (este repositório) é publicado separadamente (também em `github.com/tc2-fiap/documentation`) e não faz parte desse layout local — é material de referência, não algo que o sistema em execução ou sua build precisem em disco (`notes.md` 47, 49).
+Oito repositórios independentes sob [`github.com/tc2-fiap`](https://github.com/tc2-fiap), clonados como irmãos, lado a lado — veja `GETTING_STARTED.md` §1. O `documentation` (este repositório) é publicado separadamente (também em `github.com/tc2-fiap/documentation`) e não faz parte desse layout local — é material de referência, não algo que o sistema em execução ou sua build precisem em disco (`notes.md` 47, 49).
 
-Cada um desses oito repositórios tem seu próprio `README.md` (`notes.md` 34, 44). Cada repositório de backend segue a mesma camada interna usada pelos módulos do `base-project` — `Domain` → `Application` → `Infrastructure`, com `Endpoints` na camada mais externa, dependências apontando para dentro — mas como a estrutura do repositório *inteiro*, não um módulo dentro de um host compartilhado. Código de kernel livre de framework (`Result`, `Entity`, `IRepository`, paginação) e infraestrutura de JWT/tratamento de erros são **duplicados por serviço**, não empacotados (`notes.md` 21) — cinco cópias de ~13 arquivos pequenos, escolha feita em vez de um pacote NuGet compartilhado especificamente para evitar reintroduzir o acoplamento que a separação pretendia eliminar.
+Cada um desses nove repositórios tem seu próprio `README.md` (`notes.md` 34, 44). Cada repositório de backend segue a mesma camada interna usada pelos módulos do `base-project` — `Domain` → `Application` → `Infrastructure`, com `Endpoints` na camada mais externa, dependências apontando para dentro — mas como a estrutura do repositório *inteiro*, não um módulo dentro de um host compartilhado. Código de kernel livre de framework (`Result`, `Entity`, `IRepository`, paginação) e infraestrutura de JWT/tratamento de erros são **duplicados por serviço**, não empacotados (`notes.md` 21) — seis cópias de ~13 arquivos pequenos, escolha feita em vez de um pacote NuGet compartilhado especificamente para evitar reintroduzir o acoplamento que a separação pretendia eliminar. O `platform-api` é o único serviço sem nenhuma camada `Domain`/`Infrastructure/Persistence` — não possui agregado próprio, só um par `Application`/`Infrastructure` fino envolvendo a API do Kubernetes (`notes.md` 75).
 
 Veja o diagrama: [Topologia dos serviços](../diagrams/service-topology.md).
 
@@ -61,7 +62,7 @@ O `orders-api` também carrega as tabelas do **outbox transacional do MassTransi
 
 ## 5. Comunicação orientada a eventos
 
-Dois fluxos, ambos contratos fixos entre serviços (`instructions.md` §8) — renomear ou remodelar qualquer um deles casualmente quebra cinco serviços de uma vez. O contrato do fluxo de compra *foi* deliberadamente remodelado uma vez, para suportar pedidos com múltiplos itens — a única exceção documentada a essa regra, não um desvio casual (`notes.md` 51).
+Dois fluxos, ambos contratos fixos entre serviços (`instructions.md` §8) — renomear ou remodelar qualquer um deles casualmente quebra seis serviços de uma vez. O contrato do fluxo de compra *foi* deliberadamente remodelado uma vez, para suportar pedidos com múltiplos itens — a única exceção documentada a essa regra, não um desvio casual (`notes.md` 51).
 
 ### 5.1 Cadastro
 
@@ -113,20 +114,21 @@ Só o `users-api` precisou de uma tabela nova (`UserEvent`) — era o único ser
 
 ## 8. Implantação
 
-- **Helm**: um subchart por repositório (`Chart.yaml`, `values.yaml`, `templates/`), `orchestration` como o chart guarda-chuva dependendo de todos os seis (`notes.md` 20).
+- **Helm**: um subchart por repositório (`Chart.yaml`, `values.yaml`, `templates/`), `orchestration` como o chart guarda-chuva dependendo de todos os sete (`notes.md` 20). O subchart do `platform-api` é o único cujos templates incluem RBAC (`ServiceAccount`/`Role`/`RoleBinding`) em vez de um Secret de conexão de banco — um `Role` namespaced restrito a `get`/`list`/`watch` sobre `pods`, nunca um `ClusterRole` (`notes.md` 75).
 - **kind**: o cluster local, configurado com `extraPortMappings` e o label de nó `ingress-ready` para que o nginx-ingress possa se ligar diretamente às portas 80/443 do host.
 - **Roteamento do Ingress** (uma única URL base):
 
   | Caminho | Serviço |
   |---|---|
   | `/api/users/*` | `users-api` |
-  | `/api/games/*`, `/api/quotations/*` | `catalog-api` |
+  | `/api/catalog/*`, `/api/quotations/*` | `catalog-api` (`notes.md` 76 — renomeado de `/api/games`) |
   | `/api/orders/*`, `/api/library` | `orders-api`; `/api/orders/{id}/stream` é o endpoint de Server-Sent Events por trás da UI de status de pedido ao vivo (`notes.md` 53); `DELETE /api/library/{gameId}` remove um jogo da biblioteca do usuário e libera a recompra, sem reverter o pedido `Paid` subjacente (`notes.md` 54) |
   | `/api/payments/{orderId}`, `/api/payments/admin` | `payments-api`, admin-only; `/api/payments/checkout/{orderId}` é uma rota separada, voltada ao jogador e com verificação de posse, no mesmo prefixo (`notes.md` 40); `/api/payments/webhooks/{provider}` está construído e conectado, mas inativo — esta topologia local confirma cobranças de gateway real por polling, não por webhook; veja `notes.md` 38 |
   | `/api/notifications/*` | `notifications-api` (admin-only) |
+  | `/api/platform/*` | `platform-api` (admin-only, `GET /api/platform/admin/pods`) — o único serviço apoiado em RBAC de cluster em vez de Postgres (`notes.md` 75) |
   | `/*` | `frontend` |
 
 - **Anotações do Ingress**: o único recurso Ingress não tinha nenhuma até o endpoint de SSE precisar delas — `nginx.ingress.kubernetes.io/proxy-buffering: "off"` e `proxy-read-timeout`/`proxy-send-timeout: "120"`, já que o buffering e o timeout padrão de 60s do nginx quebrariam uma conexão de longa duração em `/api/orders/{id}/stream`. Elas se aplicam a todo o sistema (um único Ingress para todas as rotas), mas são inofensivas para o tráfego comum de requisição/resposta (`notes.md` 53).
-- **Auditoria de secrets**: `helm template | grep -iE "password\|secret\|apikey"` só expõe valores literais dentro dos próprios recursos `Secret` — toda env var de `Deployment` que referencia um deles usa `secretKeyRef`, confirmado em todos os seis charts.
+- **Auditoria de secrets**: `helm template | grep -iE "password\|secret\|apikey"` só expõe valores literais dentro dos próprios recursos `Secret` — toda env var de `Deployment` que referencia um deles usa `secretKeyRef`, confirmado em todos os sete charts.
 - **Dois ambientes de execução** (`notes.md` 24): todo repositório de backend também carrega seu próprio `docker-compose.yml`, subindo apenas aquele serviço mais a infraestrutura que ele sozinho precisa, tornando-o desenvolvível de forma independente, sem o cluster.
-- **CI/CD**: cada um dos seis repositórios carrega seu próprio `.github/workflows/ci.yml`, adaptado do formato de dois jobs do [`base-project/.github/workflows/ci-cd.yml`](https://github.com/KainanGuerra/fiap-games/blob/main/.github/workflows/ci-cd.yml): `build-and-test` (restore/build/test para os repositórios .NET, install/lint/build para o frontend) roda em todo push e PR; `docker-build-and-push` roda apenas em push para `main`, depois que o primeiro job passa, publicando no GHCR. Nenhum deles rodou durante a construção em si — a raiz deste workspace nunca foi inicializada com `git init` durante essa fase, deliberadamente. Desde então, todos os sete repositórios em execução foram publicados individualmente no GitHub sob uma organização dedicada, `tc2-fiap` (`notes.md` 47). Cada um veio inicialmente com o branch padrão `master` (padrão local do `git init`), enquanto esse gatilho é restrito ao `main` — então o CI nunca disparou silenciosamente em nenhum deles; o branch padrão de cada repositório foi renomeado para `main` logo depois, especificamente para corrigir isso (`notes.md` 48), e o CI agora roda a cada push. O `documentation` (este repositório) foi publicado mais tarde ainda, direto em `main`, mas não carrega workflow de CI próprio (`notes.md` 49).
+- **CI/CD**: cada um dos sete repositórios carrega seu próprio `.github/workflows/ci.yml`, adaptado do formato de dois jobs do [`base-project/.github/workflows/ci-cd.yml`](https://github.com/KainanGuerra/fiap-games/blob/main/.github/workflows/ci-cd.yml): `build-and-test` (restore/build/test para os repositórios .NET, install/lint/build para o frontend) roda em todo push e PR; `docker-build-and-push` roda apenas em push para `main`, depois que o primeiro job passa, publicando no GHCR. Nenhum deles rodou durante a construção em si — a raiz deste workspace nunca foi inicializada com `git init` durante essa fase, deliberadamente. Desde então, todos os oito repositórios em execução foram publicados individualmente no GitHub sob uma organização dedicada, `tc2-fiap` (`notes.md` 47). Cada um veio inicialmente com o branch padrão `master` (padrão local do `git init`), enquanto esse gatilho é restrito ao `main` — então o CI nunca disparou silenciosamente em nenhum deles; o branch padrão de cada repositório foi renomeado para `main` logo depois, especificamente para corrigir isso (`notes.md` 48), e o CI agora roda a cada push. O `documentation` (este repositório) foi publicado mais tarde ainda, direto em `main`, mas não carrega workflow de CI próprio (`notes.md` 49).

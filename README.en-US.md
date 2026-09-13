@@ -2,13 +2,13 @@
 
 # FIAP Games
 
-A .NET modular monolith, rearchitected into a distributed system: five backend services, a React frontend, and a Helm orchestration chart, running on local Kubernetes with event-driven messaging.
+A .NET modular monolith, rearchitected into a distributed system: six backend services, a React frontend, and a Helm orchestration chart, running on local Kubernetes with event-driven messaging.
 
-This repo — `documentation` — is the project's specs, decision record, and narrative documentation. It's read on GitHub, not cloned: unlike the seven repos below, it's never checked out as a sibling to run anything, since nothing about running the system needs it on disk (`notes.md` 50).
+This repo — `documentation` — is the project's specs, decision record, and narrative documentation. It's read on GitHub, not cloned: unlike the eight repos below, it's never checked out as a sibling to run anything, since nothing about running the system needs it on disk (`notes.md` 50).
 
 ## The distributed system
 
-Seven independent repos under [`github.com/tc2-fiap`](https://github.com/tc2-fiap), each cloned as a flat sibling of the *other six* — never of this repo. Every one has its own bilingual `README.md`.
+Eight independent repos under [`github.com/tc2-fiap`](https://github.com/tc2-fiap), each cloned as a flat sibling of the *other seven* — never of this repo. Every one has its own bilingual `README.md`.
 
 | Repo | Owns |
 |---|---|
@@ -17,17 +17,18 @@ Seven independent repos under [`github.com/tc2-fiap`](https://github.com/tc2-fia
 | [`orders-api`](https://github.com/tc2-fiap/orders-api) | The `Order` aggregate, the purchase lifecycle, the library, the per-order audit log |
 | [`payments-api`](https://github.com/tc2-fiap/payments-api) | The payment gateway abstraction (deterministic simulated gateway by default), persisted payment records |
 | [`notifications-api`](https://github.com/tc2-fiap/notifications-api) | Welcome emails and purchase confirmations — console by default, real delivery via Resend optionally |
-| [`frontend`](https://github.com/tc2-fiap/frontend) | The React app — catalog with cover images, a real checkout step (PIX QR when a real gateway is active), library, an admin section for the cross-service audit trail, and an English/Portuguese language toggle that shows R$ or a live-converted USD price |
+| [`platform-api`](https://github.com/tc2-fiap/platform-api) | Kubernetes pod introspection for the admin System Health dashboard — no database, no schema, the only service with cluster RBAC |
+| [`frontend`](https://github.com/tc2-fiap/frontend) | The React app — catalog with cover images, a real checkout step (PIX QR when a real gateway is active), library, an admin section for the cross-service audit trail and system health, and an English/Portuguese language toggle that shows R$ or a live-converted USD price |
 | [`orchestration`](https://github.com/tc2-fiap/orchestration) | The Helm umbrella chart: Postgres, RabbitMQ, Ingress, and every service subchart |
 
-To bring the whole system up on a local Kubernetes cluster, clone the seven repos above into one empty parent directory (keeping their default folder names — `orchestration`'s Helm chart expects the other six as literal sibling paths), then from `orchestration/`:
+To bring the whole system up on a local Kubernetes cluster, clone the eight repos above into one empty parent directory (keeping their default folder names — `orchestration`'s Helm chart expects the other seven as literal sibling paths), then from `orchestration/`:
 
 ```bash
 helm dependency update
 helm install fiap-games .
 ```
 
-This brings up all eight pods (five backend services + Postgres + RabbitMQ + frontend) from a clean cluster with zero restarts, reachable through one Ingress base URL. See [`GETTING_STARTED.en-US.md`](getting-started/GETTING_STARTED.en-US.md) ([pt-BR](getting-started/GETTING_STARTED.pt-BR.md)) for the full clone step, prerequisites, verification, and a demo walkthrough.
+This brings up all nine pods (six backend services + Postgres + RabbitMQ + frontend) from a clean cluster with zero restarts, reachable through one Ingress base URL. See [`GETTING_STARTED.en-US.md`](getting-started/GETTING_STARTED.en-US.md) ([pt-BR](getting-started/GETTING_STARTED.pt-BR.md)) for the full clone step, prerequisites, verification, and a demo walkthrough.
 
 Each service repo also runs standalone via its own `docker-compose.yml` — see that repo's own `README.md`.
 
@@ -73,7 +74,7 @@ A few that differ from the obvious reading of the requirements, each argued in `
 - **A swappable payment gateway.** Deterministic simulation by default (`notes.md` 4); `AbacatePayGateway` and `MercadoPagoGateway` are now built too, composed into an ordered fallback chain behind the `PaymentGateway:Providers` ConfigMap value — live sandbox verification against a real provider account is the one thing still pending (`notes.md` 38).
 - **An admin audit trail composed at the view layer.** An admin can see every order, its events, its payment record, and its notifications — each service exposing only its own data over its own admin endpoint, never a cross-schema query.
 - **Google sign-in without an OAuth redirect flow.** ID-token verification needs no public callback URL, sidestepping the tunnel problem that keeps the real payment gateway optional.
-- **Documentation lives in its own repo, published separately and never cloned alongside the seven runtime repos** — its narrative layer (this file, `OVERVIEW.md`, `ARCHITECTURE.md`, `GETTING_STARTED.md`, `TEST_COVERAGE.md`, every repo's `README.md`) is bilingual English/Portuguese; the spec and decision record stay English-only (`notes.md` 34, 35, 44, 50).
+- **Documentation lives in its own repo, published separately and never cloned alongside the eight runtime repos** — its narrative layer (this file, `OVERVIEW.md`, `ARCHITECTURE.md`, `GETTING_STARTED.md`, `TEST_COVERAGE.md`, every repo's `README.md`) is bilingual English/Portuguese; the spec and decision record stay English-only (`notes.md` 34, 35, 44, 50).
 
 ## Context
 

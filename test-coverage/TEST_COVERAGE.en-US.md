@@ -2,7 +2,7 @@
 
 # FIAP Games — Test Coverage
 
-Based on [`base-project/docs/DOCUMENTATION.md` §7.1](https://github.com/KainanGuerra/fiap-games/blob/main/docs/DOCUMENTATION.md), adapted for five independent backend services instead of one monolithic solution — there is no single aggregate `dotnet test --collect` run here, since each service is its own solution, schema, and test project.
+Based on [`base-project/docs/DOCUMENTATION.md` §7.1](https://github.com/KainanGuerra/fiap-games/blob/main/docs/DOCUMENTATION.md), adapted for six independent backend services instead of one monolithic solution — there is no single aggregate `dotnet test --collect` run here, since each service is its own solution, schema (where it has one), and test project.
 
 ## Measuring it
 
@@ -11,22 +11,23 @@ cd <service>-api/tests/FiapGames.<Service>.Tests
 dotnet test --collect:"XPlat Code Coverage"
 ```
 
-(No `repos/` prefix — that's this workspace's own layout, not the reproducible one. Per `notes.md` 50, `documentation` is the one repo never cloned as a sibling; the seven runtime repos, including `<service>-api`, are cloned flat into one parent directory, per `../getting-started/GETTING_STARTED.en-US.md` §1.)
+(No `repos/` prefix — that's this workspace's own layout, not the reproducible one. Per `notes.md` 50, `documentation` is the one repo never cloned as a sibling; the eight runtime repos, including `<service>-api`, are cloned flat into one parent directory, per `../getting-started/GETTING_STARTED.en-US.md` §1.)
 
-Each run drops a Cobertura report under that project's `TestResults/`; the numbers below were produced this way, one run per service, on 2026-09-01.
+Each run drops a Cobertura report under that project's `TestResults/`; the numbers below were produced this way, one run per service, on 2026-09-13 (re-measured after `platform-api` was added — see `notes.md` 75).
 
-## Aggregate line coverage: 16.0%
+## Aggregate line coverage: 14.9%
 
-1,184 of 7,392 lines, summed across all five services' Cobertura reports (not an average of the five percentages, since the services are far from equal in size).
+1,223 of 8,218 lines, summed across all six services' Cobertura reports (not an average of the six percentages, since the services are far from equal in size).
 
 | Service | Coverage | Tests |
 |---|---|---|
-| `users-api` | 16.1% | 18 |
-| `catalog-api` | 15.9% | 17 |
-| `orders-api` | 8.3% | 30 |
-| `payments-api` | 32.4% | 52 |
-| `notifications-api` | 14.3% | 5 |
-| **Total** | **16.0%** | **122** |
+| `users-api` | 16.1% | 19 |
+| `catalog-api` | 15.0% | 19 |
+| `orders-api` | 8.7% | 35 |
+| `payments-api` | 32.2% | 52 |
+| `notifications-api` | 14.1% | 5 |
+| `platform-api` | 2.1% | 2 |
+| **Total** | **14.9%** | **132** |
 
 ## Where coverage is, and isn't
 
@@ -34,7 +35,9 @@ Same pattern as the monolith this system replaced: coverage is concentrated in `
 
 **`payments-api` is the outlier, at more than double the next-highest service.** Its gateway abstraction — `SimulatedPaymentGateway`, `AbacatePayGateway`, `MercadoPagoGateway`, `PaymentGatewayChain`, `PaymentStatusPollingWorker` — is unit-tested with HTTP mocked via a fake `HttpMessageHandler` (`notes.md` 38), something no other service's `Infrastructure` layer has an equivalent of.
 
-**`orders-api` is the lowest, despite having the most tests of any service.** Its `Infrastructure/Persistence` layer is also the largest — `OrderRepository`, `OrdersDbContext`, and four EF migrations (`InitialCreate`, `AddOrderEventAuditLog`, `MultiItemOrders`, `RemoveFromLibrary`) — all left at 0%, since the properties that matter there (a real partial unique index rejecting a concurrent duplicate purchase, or freeing a removed game up for repurchase) were verified against a real, disposable Postgres instance rather than a mock, per `notes.md` 52 and 54.
+**`orders-api` has the most tests of any service, but not the lowest coverage** — its `Infrastructure/Persistence` layer is the largest of the five database-backed services (`OrderRepository`, `OrdersDbContext`, and four EF migrations: `InitialCreate`, `AddOrderEventAuditLog`, `MultiItemOrders`, `RemoveFromLibrary`) — all left at 0%, since the properties that matter there (a real partial unique index rejecting a concurrent duplicate purchase, or freeing a removed game up for repurchase) were verified against a real, disposable Postgres instance rather than a mock, per `notes.md` 52 and 54.
+
+**`platform-api` is the actual lowest, and for a different reason than any database-backed service.** It has no `Domain`/`Infrastructure/Persistence` layer to skew the denominator down (no database at all — `notes.md` 75) — its two tests cover `PodService`, the one piece of business logic it has, mocking `IPodReader`. Everything else — `KubernetesPodReader` (the real Kubernetes API client) and `Endpoints/PlatformEndpoints.cs` — is unverified by an automated test the same way every other service's `Endpoints`/`Infrastructure` sits at ~0%, and was instead confirmed live against the running cluster (real pod data returned through the Ingress with an admin token, `403` with a player token).
 
 ## Frontend
 

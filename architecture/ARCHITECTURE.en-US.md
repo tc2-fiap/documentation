@@ -12,13 +12,14 @@ catalog-api/          # game catalog — product reference data only
 orders-api/           # the Order aggregate, purchase lifecycle, library, audit log
 payments-api/         # payment gateway abstraction, persisted payment records
 notifications-api/    # welcome emails, purchase confirmations (console or Resend)
+platform-api/         # Kubernetes pod introspection for the admin System Health dashboard — no database, no schema
 frontend/             # React + Vite — the only service reached by a browser directly; also owns design/, the brand assets
 orchestration/        # Postgres, RabbitMQ, Ingress, umbrella Helm chart
 ```
 
-Seven independent repos under [`github.com/tc2-fiap`](https://github.com/tc2-fiap), cloned as flat siblings — see `GETTING_STARTED.md` §1. `documentation` (this repo) is published separately (also `github.com/tc2-fiap/documentation`) and isn't part of that local layout — it's reference material, not something the running system or its build needs on disk (`notes.md` 47, 49).
+Eight independent repos under [`github.com/tc2-fiap`](https://github.com/tc2-fiap), cloned as flat siblings — see `GETTING_STARTED.md` §1. `documentation` (this repo) is published separately (also `github.com/tc2-fiap/documentation`) and isn't part of that local layout — it's reference material, not something the running system or its build needs on disk (`notes.md` 47, 49).
 
-Every one of these eight repos has its own `README.md` (`notes.md` 34, 44). Each backend repo follows the same internal layering `base-project`'s modules used — `Domain` → `Application` → `Infrastructure`, with `Endpoints` outermost, dependencies pointing inward — but as the *entire* repo's structure, not a module within a shared host. Framework-free kernel code (`Result`, `Entity`, `IRepository`, pagination) and JWT/error-handling infrastructure are **duplicated per service**, not packaged (`notes.md` 21) — five copies of ~13 small files, chosen over a shared NuGet package specifically to avoid reintroducing the coupling the split was meant to remove.
+Every one of these nine repos has its own `README.md` (`notes.md` 34, 44). Each backend repo follows the same internal layering `base-project`'s modules used — `Domain` → `Application` → `Infrastructure`, with `Endpoints` outermost, dependencies pointing inward — but as the *entire* repo's structure, not a module within a shared host. Framework-free kernel code (`Result`, `Entity`, `IRepository`, pagination) and JWT/error-handling infrastructure are **duplicated per service**, not packaged (`notes.md` 21) — six copies of ~13 small files, chosen over a shared NuGet package specifically to avoid reintroducing the coupling the split was meant to remove. `platform-api` is the one service with no `Domain`/`Infrastructure/Persistence` layer at all — it owns no aggregate, only a thin `Application`/`Infrastructure` pair wrapping the Kubernetes API (`notes.md` 75).
 
 See the diagram: [Service topology](../diagrams/service-topology.md) (labels in Portuguese — see `notes.md` for why `diagrams/` is single-language).
 
@@ -61,7 +62,7 @@ Unlike `base-project`'s schemaless MongoDB (index migrations only), this system 
 
 ## 5. Event-driven communication
 
-Two flows, both fixed contracts across services (`instructions.md` §8) — renaming or reshaping either casually breaks five services at once. The purchase flow's contract *was* deliberately reshaped once, to support multi-item orders — the one documented exception to that rule, not a casual drift (`notes.md` 51).
+Two flows, both fixed contracts across services (`instructions.md` §8) — renaming or reshaping either casually breaks six services at once. The purchase flow's contract *was* deliberately reshaped once, to support multi-item orders — the one documented exception to that rule, not a casual drift (`notes.md` 51).
 
 ### 5.1 Registration
 
@@ -113,20 +114,21 @@ Only `users-api` needed a new table (`UserEvent`) — it was the one service wit
 
 ## 8. Deployment
 
-- **Helm**: one subchart per repo (`Chart.yaml`, `values.yaml`, `templates/`), `orchestration` as the umbrella chart depending on all six (`notes.md` 20).
+- **Helm**: one subchart per repo (`Chart.yaml`, `values.yaml`, `templates/`), `orchestration` as the umbrella chart depending on all seven (`notes.md` 20). `platform-api`'s subchart is the only one whose templates include RBAC (`ServiceAccount`/`Role`/`RoleBinding`) instead of a database-connection Secret — a namespaced `Role` scoped to `get`/`list`/`watch` on `pods`, never a `ClusterRole` (`notes.md` 75).
 - **kind**: the local cluster, configured with `extraPortMappings` and the `ingress-ready` node label so nginx-ingress can bind host ports 80/443 directly.
 - **Ingress routing** (single base URL):
 
   | Path | Service |
   |---|---|
   | `/api/users/*` | `users-api` |
-  | `/api/games/*`, `/api/quotations/*` | `catalog-api` |
+  | `/api/catalog/*`, `/api/quotations/*` | `catalog-api` (`notes.md` 76 — renamed from `/api/games`) |
   | `/api/orders/*`, `/api/library` | `orders-api`; `/api/orders/{id}/stream` is the Server-Sent Events endpoint behind the live order-status UI (`notes.md` 53); `DELETE /api/library/{gameId}` removes a game from the caller's library and frees it up for repurchase, without reversing the underlying `Paid` order (`notes.md` 54) |
   | `/api/payments/{orderId}`, `/api/payments/admin` | `payments-api`, admin-only; `/api/payments/checkout/{orderId}` is a separate, player-facing, ownership-checked route on the same prefix (`notes.md` 40); `/api/payments/webhooks/{provider}` is built and wired but dormant — this local topology confirms real gateway charges by polling, not webhook, see `notes.md` 38 |
   | `/api/notifications/*` | `notifications-api` (admin-only) |
+  | `/api/platform/*` | `platform-api` (admin-only, `GET /api/platform/admin/pods`) — the only service backed by cluster RBAC instead of Postgres (`notes.md` 75) |
   | `/*` | `frontend` |
 
 - **Ingress annotations**: the single Ingress resource had none at all until the SSE endpoint needed them — `nginx.ingress.kubernetes.io/proxy-buffering: "off"` and `proxy-read-timeout`/`proxy-send-timeout: "120"`, since nginx's default buffering and 60s timeout would otherwise break a long-lived `/api/orders/{id}/stream` connection. They apply system-wide (one Ingress for every route) but are harmless for ordinary request/response traffic (`notes.md` 53).
-- **Secrets audit**: `helm template | grep -iE "password\|secret\|apikey"` surfaces literal values only inside `Secret` resources themselves — every `Deployment` env var referencing one uses `secretKeyRef`, confirmed across all six charts.
+- **Secrets audit**: `helm template | grep -iE "password\|secret\|apikey"` surfaces literal values only inside `Secret` resources themselves — every `Deployment` env var referencing one uses `secretKeyRef`, confirmed across all seven charts.
 - **Two runtime environments** (`notes.md` 24): every backend repo also carries its own `docker-compose.yml`, bringing up that service plus only the infrastructure it alone needs, so it's independently developable without the cluster.
-- **CI/CD**: each of the six repos carries its own `.github/workflows/ci.yml`, adapted from [`base-project/.github/workflows/ci-cd.yml`](https://github.com/KainanGuerra/fiap-games/blob/main/.github/workflows/ci-cd.yml)'s two-job shape: `build-and-test` (restore/build/test for .NET repos, install/lint/build for the frontend) runs on every push and PR; `docker-build-and-push` runs only on a push to `main`, after the first job passes, publishing to GHCR. None of these executed during the build itself — this workspace's root was never `git init`'d for its duration, deliberately. Since then, all seven runtime repos were published individually to GitHub under a dedicated org, `tc2-fiap` (`notes.md` 47). Each initially defaulted to a `master` branch (`git init`'s local default) while this trigger is scoped to `main`, so CI silently never fired on any of them — every repo's default branch was renamed to `main` shortly after specifically to fix that (`notes.md` 48), and CI now runs on every push. `documentation` (this repo) was published later still, directly on `main`, but carries no CI workflow of its own (`notes.md` 49).
+- **CI/CD**: each of the seven repos carries its own `.github/workflows/ci.yml`, adapted from [`base-project/.github/workflows/ci-cd.yml`](https://github.com/KainanGuerra/fiap-games/blob/main/.github/workflows/ci-cd.yml)'s two-job shape: `build-and-test` (restore/build/test for .NET repos, install/lint/build for the frontend) runs on every push and PR; `docker-build-and-push` runs only on a push to `main`, after the first job passes, publishing to GHCR. None of these executed during the build itself — this workspace's root was never `git init`'d for its duration, deliberately. Since then, all eight runtime repos were published individually to GitHub under a dedicated org, `tc2-fiap` (`notes.md` 47). Each initially defaulted to a `master` branch (`git init`'s local default) while this trigger is scoped to `main`, so CI silently never fired on any of them — every repo's default branch was renamed to `main` shortly after specifically to fix that (`notes.md` 48), and CI now runs on every push. `documentation` (this repo) was published later still, directly on `main`, but carries no CI workflow of its own (`notes.md` 49).

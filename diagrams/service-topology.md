@@ -7,10 +7,11 @@ flowchart LR
     Browser["Navegador"] -->|"uma única URL base"| Ingress["nginx-ingress"]
     Ingress -->|"/"| Frontend["frontend"]
     Ingress -->|"/api/users"| Users["users-api"]
-    Ingress -->|"/api/games, /api/quotations"| Catalog["catalog-api"]
+    Ingress -->|"/api/catalog, /api/quotations"| Catalog["catalog-api"]
     Ingress -->|"/api/orders, /api/library"| Orders["orders-api"]
     Ingress -->|"/api/payments"| Payments["payments-api"]
     Ingress -->|"/api/notifications"| Notifications["notifications-api"]
+    Ingress -->|"/api/platform"| Platform["platform-api"]
 
     Orders -.->|consulta de preço, HTTP síncrono| Catalog
     Catalog -.->|"cotação USD/BRL, cacheada"| Frankfurter[("Frankfurter /\nExchangeRate-API")]
@@ -19,6 +20,7 @@ flowchart LR
     RabbitMQ -.-> Orders
     RabbitMQ -.-> Notifications
     Users -.->|"UserCreatedEvent"| RabbitMQ
+    Platform -.->|"lista pods (RBAC)"| K8sAPI[("Kubernetes API")]
 
     Users --> Postgres[("PostgreSQL\n(1 instância, 1 schema+role por serviço)")]
     Catalog --> Postgres

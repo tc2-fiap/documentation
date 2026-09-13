@@ -2,13 +2,13 @@
 
 # FIAP Games
 
-Um monólito modular em .NET, rearquitetado como um sistema distribuído: cinco serviços de backend, um frontend em React e um chart Helm de orquestração, rodando em Kubernetes local com mensageria orientada a eventos.
+Um monólito modular em .NET, rearquitetado como um sistema distribuído: seis serviços de backend, um frontend em React e um chart Helm de orquestração, rodando em Kubernetes local com mensageria orientada a eventos.
 
-Este repositório — `documentation` — reúne a especificação, o registro de decisões e a documentação narrativa do projeto. Ele é lido no GitHub, não clonado: diferente dos sete repositórios abaixo, ele nunca é clonado como irmão para rodar nada, já que nada na execução do sistema precisa dele em disco (`notes.md` 50).
+Este repositório — `documentation` — reúne a especificação, o registro de decisões e a documentação narrativa do projeto. Ele é lido no GitHub, não clonado: diferente dos oito repositórios abaixo, ele nunca é clonado como irmão para rodar nada, já que nada na execução do sistema precisa dele em disco (`notes.md` 50).
 
 ## O sistema distribuído
 
-Sete repositórios independentes sob [`github.com/tc2-fiap`](https://github.com/tc2-fiap), cada um clonado como irmão lado a lado dos *outros seis* — nunca deste repositório. Cada um tem seu próprio `README.md` bilíngue.
+Oito repositórios independentes sob [`github.com/tc2-fiap`](https://github.com/tc2-fiap), cada um clonado como irmão lado a lado dos *outros sete* — nunca deste repositório. Cada um tem seu próprio `README.md` bilíngue.
 
 | Repositório | Responsabilidade |
 |---|---|
@@ -17,17 +17,18 @@ Sete repositórios independentes sob [`github.com/tc2-fiap`](https://github.com/
 | [`orders-api`](https://github.com/tc2-fiap/orders-api) | O agregado `Order`, o ciclo de vida da compra, a biblioteca, o log de auditoria por pedido |
 | [`payments-api`](https://github.com/tc2-fiap/payments-api) | A abstração do gateway de pagamento (gateway simulado determinístico por padrão), registros de pagamento persistidos |
 | [`notifications-api`](https://github.com/tc2-fiap/notifications-api) | E-mails de boas-vindas e confirmações de compra — console por padrão, envio real via Resend opcionalmente |
-| [`frontend`](https://github.com/tc2-fiap/frontend) | O app React — catálogo com capas de jogos, um passo de checkout real (QR code PIX quando um gateway real está ativo), biblioteca, uma seção de admin para a trilha de auditoria entre serviços, e uma alternância de idioma Inglês/Português que mostra R$ ou um preço em USD convertido ao vivo |
+| [`platform-api`](https://github.com/tc2-fiap/platform-api) | Introspecção de pods do Kubernetes para o painel de saúde do sistema (admin) — sem banco de dados, sem schema, o único serviço com RBAC no cluster |
+| [`frontend`](https://github.com/tc2-fiap/frontend) | O app React — catálogo com capas de jogos, um passo de checkout real (QR code PIX quando um gateway real está ativo), biblioteca, uma seção de admin para a trilha de auditoria entre serviços e a saúde do sistema, e uma alternância de idioma Inglês/Português que mostra R$ ou um preço em USD convertido ao vivo |
 | [`orchestration`](https://github.com/tc2-fiap/orchestration) | O chart Helm guarda-chuva: Postgres, RabbitMQ, Ingress e todos os subcharts de serviço |
 
-Para subir o sistema inteiro em um cluster Kubernetes local, clone os sete repositórios acima em um único diretório pai vazio (mantendo os nomes de pasta padrão — o chart Helm do `orchestration` espera que os outros seis sejam caminhos irmãos literais), depois, a partir de `orchestration/`:
+Para subir o sistema inteiro em um cluster Kubernetes local, clone os oito repositórios acima em um único diretório pai vazio (mantendo os nomes de pasta padrão — o chart Helm do `orchestration` espera que os outros sete sejam caminhos irmãos literais), depois, a partir de `orchestration/`:
 
 ```bash
 helm dependency update
 helm install fiap-games .
 ```
 
-Isso sobe todos os oito pods (cinco serviços de backend + Postgres + RabbitMQ + frontend) a partir de um cluster limpo, sem nenhum reinício, acessados por uma única URL base de Ingress. Veja [`GETTING_STARTED.pt-BR.md`](getting-started/GETTING_STARTED.pt-BR.md) ([English](getting-started/GETTING_STARTED.en-US.md)) para o passo de clonagem completo, os pré-requisitos, a verificação e um passo a passo de demonstração.
+Isso sobe todos os nove pods (seis serviços de backend + Postgres + RabbitMQ + frontend) a partir de um cluster limpo, sem nenhum reinício, acessados por uma única URL base de Ingress. Veja [`GETTING_STARTED.pt-BR.md`](getting-started/GETTING_STARTED.pt-BR.md) ([English](getting-started/GETTING_STARTED.en-US.md)) para o passo de clonagem completo, os pré-requisitos, a verificação e um passo a passo de demonstração.
 
 Cada repositório de serviço também roda de forma independente via seu próprio `docker-compose.yml` — veja o `README.md` daquele repositório.
 
@@ -73,7 +74,7 @@ Algumas que divergem da leitura óbvia dos requisitos, cada uma justificada em `
 - **Um gateway de pagamento substituível.** Simulação determinística por padrão (`notes.md` 4); `AbacatePayGateway` e `MercadoPagoGateway` também já foram construídos, compostos em uma cadeia de fallback ordenada atrás do valor de ConfigMap `PaymentGateway:Providers` — a verificação em sandbox real contra uma conta de provedor de verdade é a única coisa ainda pendente (`notes.md` 38).
 - **Uma trilha de auditoria de admin composta na camada de visualização.** Um admin pode ver todo pedido, seus eventos, seu registro de pagamento e suas notificações — cada serviço expondo apenas seu próprio dado através do seu próprio endpoint de admin, nunca uma consulta entre schemas.
 - **Login com Google sem um fluxo de redirecionamento OAuth.** A verificação de ID token não precisa de uma URL pública de callback, contornando o mesmo problema de túnel que mantém o gateway de pagamento real como opcional.
-- **A documentação vive em seu próprio repositório, publicado separadamente e nunca clonado junto com os sete repositórios de execução** — sua camada narrativa (este arquivo, `OVERVIEW.md`, `ARCHITECTURE.md`, `GETTING_STARTED.md`, `TEST_COVERAGE.md`, o `README.md` de cada repositório) é bilíngue inglês/português; a especificação e o registro de decisões permanecem somente em inglês (`notes.md` 34, 35, 44, 50).
+- **A documentação vive em seu próprio repositório, publicado separadamente e nunca clonado junto com os oito repositórios de execução** — sua camada narrativa (este arquivo, `OVERVIEW.md`, `ARCHITECTURE.md`, `GETTING_STARTED.md`, `TEST_COVERAGE.md`, o `README.md` de cada repositório) é bilíngue inglês/português; a especificação e o registro de decisões permanecem somente em inglês (`notes.md` 34, 35, 44, 50).
 
 ## Contexto
 

@@ -4,7 +4,7 @@
 
 [`base-project/`](https://github.com/KainanGuerra/fiap-games) is a working reference: a .NET modular monolith (Users + Games) built with Clean Architecture, DDD-flavored bounded contexts, JWT auth, the Result pattern, global error handling, structured logging, and containerization — see [`base-project/docs/DOCUMENTATION.md`](https://github.com/KainanGuerra/fiap-games/blob/main/docs/DOCUMENTATION.md).
 
-This document specifies the next step: **splitting that same domain into a real distributed system** — five independently deployable backend services, one frontend, and one orchestration repository — communicating asynchronously over a message broker, running **locally on Kubernetes** (no cloud deployment at this stage).
+This document specifies the next step: **splitting that same domain into a real distributed system** — six independently deployable backend services, one frontend, and one orchestration repository — communicating asynchronously over a message broker, running **locally on Kubernetes** (no cloud deployment at this stage).
 
 `base-project` is not being discarded; it is the architectural template each new service's internals should follow (layering, validation, error handling, logging, testing approach). What changes is the boundary: instead of modules inside one process, each bounded context becomes its own repository, its own schema, its own deployable, talking to the others only through events.
 
@@ -36,9 +36,9 @@ What does **not** carry over: the modular-monolith host, the shared in-process `
 
 ## 3. Repository layout
 
-Seven repositories, each independently buildable and deployable:
+Eight repositories, each independently buildable and deployable:
 
-All seven live under `repos/` in this workspace.
+All eight live under `repos/` in this workspace.
 
 | Repo | Contents |
 |---|---|
@@ -47,6 +47,7 @@ All seven live under `repos/` in this workspace.
 | [`orders-api`](https://github.com/tc2-fiap/orders-api) | OrdersAPI service + `Dockerfile` + `docker-compose.yml` + `/k8s` Helm subchart |
 | [`payments-api`](https://github.com/tc2-fiap/payments-api) | PaymentsAPI service + `Dockerfile` + `docker-compose.yml` + `/k8s` Helm subchart |
 | [`notifications-api`](https://github.com/tc2-fiap/notifications-api) | NotificationsAPI service + `Dockerfile` + `docker-compose.yml` + `/k8s` Helm subchart |
+| [`platform-api`](https://github.com/tc2-fiap/platform-api) | PlatformAPI service + `Dockerfile` + `docker-compose.yml` + `/k8s` Helm subchart |
 | [`frontend`](https://github.com/tc2-fiap/frontend) | React + Vite client + `Dockerfile` + `docker-compose.yml` + `/k8s` Helm subchart |
 | [`orchestration`](https://github.com/tc2-fiap/orchestration) | Helm umbrella chart, RabbitMQ, PostgreSQL, namespace, Ingress, bring-up tooling |
 
@@ -76,7 +77,7 @@ Also supports:
 - **Admin visibility.** An admin can see every user's orders and, per order, the full cross-service trail — see [§4.3](#43-ordersapi), [§4.4](#44-paymentsapi), and [§4.5](#45-notificationsapi).
 
 ### 4.2 CatalogAPI
-CRUD for the game catalog — **product reference data only**. Owns the `Game` aggregate: title, genre, platform, description, price, release date. Read-heavy, not user-scoped, and deliberately **outside the purchase flow**: it publishes no events and consumes none. Its only role in a purchase is answering "does this game exist and what does it cost" when OrdersAPI asks ([§6](#6-how-orders-learns-the-price)). `GET /api/games` is open to any authenticated user and supports search/filter/sort query params; `POST`/`PUT`/`DELETE` are admin-only. See [`notes.md`](notes.md) 63.
+CRUD for the game catalog — **product reference data only**. Owns the `Game` aggregate: title, genre, platform, description, price, release date. Read-heavy, not user-scoped, and deliberately **outside the purchase flow**: it publishes no events and consumes none. Its only role in a purchase is answering "does this game exist and what does it cost" when OrdersAPI asks ([§6](#6-how-orders-learns-the-price)). `GET /api/catalog` is open to any authenticated user and supports search/filter/sort query params; `POST`/`PUT`/`DELETE` are admin-only. See [`notes.md`](notes.md) 63, 76.
 
 ### 4.3 OrdersAPI
 Owns the purchase lifecycle and, by extension, each user's library. Owns the `Order` aggregate: `OrderId`, `UserId`, `Status` (`Pending` → `Paid` | `Failed`), timestamps, and a collection of `OrderItem { GameId, Price }` (each price a **snapshot** taken at order time) — a cart checkout places one order for several games, so an order is multi-item, not a single game/price pair. `TotalPrice` is the sum of its items' snapshotted prices. Two DB-level unique constraints on `order_items` keep two invariants that used to be application-only checks: a game can't appear twice in the same order, and (excluding `Failed` items) a user can't have two active order items for the same game across any of their orders. See [`notes.md`](notes.md) 51–52.
@@ -107,7 +108,19 @@ Delivery channel is a runtime switch (`Email:Provider` = `console` default, `res
 
 Keeps a local `UserProjection` (UserId → Name/Email), populated from `UserCreatedEvent`, since `PaymentProcessedEvent` carries only a `UserId` and this service needs an address to send to — a projection, not a cross-service read. Admin-only: `GET /api/notifications?orderId=`. See [`notes.md`](notes.md) 30.
 
-### 4.6 Deviation from the original brief
+### 4.6 PlatformAPI
+
+The sixth backend service, added after the original five ([`notes.md`](notes.md) 75) — not part of the original brief, and not part of the purchase flow at all. Owns cluster introspection for the admin "System Health" dashboard: `GET /api/platform/admin/pods` (admin-only) lists every Pod in the namespace (name, owning application, node, phase, ready/total containers, restart count, start time) by calling the Kubernetes API directly via `IKubernetes`/`InClusterConfig()`, not by reading anything any other service owns.
+
+PlatformAPI is deliberately the odd one out among the six:
+
+- **No database, no schema, no role.** It is the one backend service absent from the schema list in [§10](#10-non-functional-requirements) — there is nothing here for Postgres to isolate.
+- **No events published or consumed.** Like CatalogAPI, it sits outside [§8](#8-event-driven-communication) entirely, for an unrelated reason: it has no domain aggregate to raise events about.
+- **The only service with Kubernetes RBAC.** A dedicated `ServiceAccount` bound to a namespaced `Role` (`get`/`list`/`watch` on `pods` only — never a `ClusterRole`, and never write access) is the sole cluster-API credential anywhere in the system. Every other service's Kubernetes footprint is "a Deployment that runs a container"; this is the one place a service is *aware* it runs on Kubernetes at all.
+
+Every other service also gains a `GET /version` (or, for two admin-gated services, `GET /api/<prefix>/version`) endpoint returning `{ sha, buildTime }`, baked in at image build time via `--build-arg`. The dashboard's Services table calls each service's version endpoint (`Promise.allSettled`, so one unreachable service doesn't blank the page) alongside PlatformAPI's Pods table — two independent data sources on the same page, not one endpoint doing both jobs.
+
+### 4.7 Deviation from the original brief
 
 The original requirement assigned purchase initiation to CatalogAPI ("responsável pelo CRUD de jogos **e por iniciar o fluxo de compra**"). This spec moves that to a dedicated OrdersAPI instead.
 
@@ -184,7 +197,7 @@ Checkout has two entry points — `Add to Cart` then a `/cart` review, or a `Buy
 
 The **`Pending` → `Paid` transition must be visible in the UI** — that's what makes the asynchronous architecture legible to someone watching, instead of an implementation detail they have to take on faith. This is delivered by subscribing to the order's Server-Sent Events stream ([§4.3](#43-ordersapi)) rather than polling, so the transition appears the moment it happens instead of on the next poll tick. See [`notes.md`](notes.md) 53.
 
-The frontend talks to a **single base URL** and relies on Ingress path routing ([§9.1](#91-ingress-routing)), so it never needs to know that five backend services exist. It obtains a JWT from UsersAPI and sends it as `Authorization: Bearer <token>` on every subsequent call.
+The frontend talks to a **single base URL** and relies on Ingress path routing ([§9.1](#91-ingress-routing)), so it never needs to know that six backend services exist. It obtains a JWT from UsersAPI and sends it as `Authorization: Bearer <token>` on every subsequent call.
 
 ## 8. Event-driven communication
 
@@ -229,7 +242,7 @@ Mandatory rules, non-negotiable per the assignment:
 - **ConfigMaps are mandatory** for all non-sensitive configuration — queue/exchange names, service base URLs (including Orders → Catalog), `PAYMENT_GATEWAY_PROVIDERS`, `PAYMENT_PROCESSING_DELAY_SECONDS`, `PAYMENT_POLLING_*`, log levels.
 - **Secrets are mandatory** for all sensitive configuration — Postgres connection strings, the JWT signing key, broker credentials, payment provider API keys and webhook signing secrets.
 - Each backend repo and the frontend repo carries its **own** `/k8s` folder at its root, holding that service's **Helm subchart** — Deployment, Service, ConfigMap, and Secret template. The chart's `templates/` *are* the manifests the requirement asks for; packaging them as a chart doesn't replace them.
-- The `orchestration` repo is the **Helm umbrella chart** that depends on all six subcharts, plus what no single service owns: namespace, RabbitMQ, PostgreSQL, the Ingress, and bring-up tooling.
+- The `orchestration` repo is the **Helm umbrella chart** that depends on all seven subcharts, plus what no single service owns: namespace, RabbitMQ, PostgreSQL, the Ingress, and bring-up tooling.
 
 ### 9.1 Ingress routing
 
@@ -238,10 +251,11 @@ One entry point (nginx-ingress), path-routed, so the frontend sees a single base
 | Path | Service |
 |---|---|
 | `/api/users/*` | users-api |
-| `/api/games/*` | catalog-api |
+| `/api/catalog/*` | catalog-api |
 | `/api/orders/*`, `/api/library` | orders-api |
 | `/api/payments/*` | payments-api — admin-only (`GET /api/payments/{orderId}`); `/api/payments/webhooks/{provider}` is built and would be the one *externally*-reachable path (per [§5.2](#52-real-gateways-abacatepay-and-mercado-pago-devsandbox-mode)) once a real public Ingress exists — dormant in this local topology, where confirmation is by polling instead |
 | `/api/notifications/*` | notifications-api — admin-only (`GET /api/notifications?orderId=`) |
+| `/api/platform/*` | platform-api — admin-only (`GET /api/platform/admin/pods`), see [§4.6](#46-platformapi) |
 | `/*` | frontend |
 
 ### 9.2 Shared infrastructure
@@ -310,11 +324,11 @@ Still open:
 
 ## 14. Acceptance criteria
 
-- [x] Each of the five backend services builds, runs, and passes its own test suite independently. — 122 tests total (users 18, catalog 17, orders 30, payments 52, notifications 5).
+- [x] Each of the six backend services builds, runs, and passes its own test suite independently. — 132 tests total (users 19, catalog 19, orders 35, payments 52, notifications 5, platform 2).
 - [x] Each backend repo and the frontend repo has its own `Dockerfile` and its own `/k8s` folder at its root.
-- [x] `helm install` of the `orchestration` umbrella chart brings up the full environment (Postgres + RabbitMQ + five services + frontend + Ingress) from a clean cluster in one command. — verified: a fresh `helm uninstall` + PVC delete + `helm install` brought up all **8** pods (5 backends + Postgres + RabbitMQ + frontend) with **zero restarts** (an initContainer per DB-backed service waits for Postgres before migrating, closing a cold-start race — see `notes.md` 25).
+- [x] `helm install` of the `orchestration` umbrella chart brings up the full environment (Postgres + RabbitMQ + six services + frontend + Ingress) from a clean cluster in one command. — verified: a fresh `helm uninstall` + PVC delete + `helm install` brought up all **9** pods (6 backends + Postgres + RabbitMQ + frontend) with **zero restarts** (an initContainer per DB-backed service waits for Postgres before migrating, closing a cold-start race — see `notes.md` 25; `platform-api` has no database, so it carries no such initContainer).
 - [x] No Pod exists outside a Deployment anywhere in the system.
-- [x] All non-sensitive config comes from ConfigMaps; all sensitive config from Secrets — no hardcoded connection strings or keys in any manifest or image. — re-audited via `helm template | grep` across all five services (including the new admin/resend/google config); literal values appear only inside Secret resources themselves.
+- [x] All non-sensitive config comes from ConfigMaps; all sensitive config from Secrets — no hardcoded connection strings or keys in any manifest or image. — re-audited via `helm template | grep` across all six services (including the new admin/resend/google config); literal values appear only inside Secret resources themselves.
 - [x] End-to-end registration flow: `UsersAPI` publishes `UserCreatedEvent`, `NotificationsAPI` logs the simulated welcome email.
 - [x] End-to-end purchase flow works for both outcomes: `OrdersAPI` → `OrderPlacedEvent` → `PaymentsAPI` → `PaymentProcessedEvent` → `OrdersAPI` (order `Paid` only on `Approved`) → `NotificationsAPI` (correct message for each outcome).
 - [x] CatalogAPI publishes no events and consumes none; the purchase flow completes without it being in the message path.
@@ -330,9 +344,9 @@ Still open:
 - [x] The simulated gateway returns the same outcome for the same price on every run. — unit tested at the exact `999.00` boundary plus 8 other cases, and confirmed live.
 - [ ] With a real gateway active, a webhook with an invalid or missing signature is rejected and **no** `PaymentProcessedEvent` is published. — `IPaymentWebhookHandler` and the signature checks are built and unit-tested for both providers, but the endpoint is dormant in this local topology (no public Ingress reaches it) — confirmation currently happens via polling instead. See `notes.md` 38.
 - [x] No payment provider API key appears in any manifest, image layer, or commit. — `AbacatePay`/`MercadoPago` credentials are wired via k8s Secrets (`abacatepay-credentials`, `mercadopago-credentials`), empty by default; verified by rendering the Helm templates and confirming no literal key ever appears in a ConfigMap or Deployment manifest.
-- [x] A JWT issued by `UsersAPI` is accepted by the other four services; a missing/invalid token is rejected with `401`/`403` by each independently. — verified for all five: users/catalog/orders reject with `401` unauthenticated; payments-api and notifications-api's new admin endpoints reject with `401` unauthenticated and `403` for a non-admin token.
+- [x] A JWT issued by `UsersAPI` is accepted by the other five services; a missing/invalid token is rejected with `401`/`403` by each independently. — verified for all six: users/catalog/orders reject with `401` unauthenticated; payments-api and notifications-api's admin endpoints reject with `401` unauthenticated and `403` for a non-admin token; platform-api's `/api/platform/admin/pods` does the same (`401` unauthenticated, `403` for a player token, `200` with real pod data for an admin token).
 - [x] Re-delivering the same event to a consumer does not duplicate its effect, keyed on `OrderId`. — verified live with a throwaway MassTransit replay tool: redelivered `PaymentProcessedEvent` was ignored by both `orders-api` (state guard, already-Paid) and `notifications-api` (persistent dedupe store, keyed on `OrderId`); redelivered `UserCreatedEvent` was skipped by the same dedupe mechanism keyed on `UserId`.
-- [x] A single `OrderId` traces the whole purchase across all five services' logs. — within the services the purchase flow actually touches: `orders-api`, `payments-api`, `notifications-api` all log `OrderId` as a named property end to end. `UsersAPI`/`CatalogAPI` are outside the purchase event path by design (see §4.6, criterion above).
+- [x] A single `OrderId` traces the whole purchase across all five services in its path, in their logs. — within the services the purchase flow actually touches: `orders-api`, `payments-api`, `notifications-api` all log `OrderId` as a named property end to end. `UsersAPI`/`CatalogAPI` are outside the purchase event path by design (see §4.7, criterion above); `platform-api` is outside it too, for the same reason CatalogAPI is — no purchase-flow event ever reaches it (see [§4.6](#46-platformapi)).
 - [x] An admin can view every user's orders and, per order, the full cross-service trail — the actual event payloads, the payment gateway's request/response, and the notification(s) sent — while a non-admin gets `403` from all four admin endpoints. — verified live end to end with a seeded admin account.
 - [x] Redelivering `OrderPlacedEvent` to `payments-api` does not create a second `Payment` row for the same order. — verified live with the replay tool; same `Payment.Id` before and after.
 - [ ] Google sign-in issues the same JWT shape as password login, and auto-links to an existing password account by matching email. — the frontend's login page conditionally renders the button (confirmed hidden when unconfigured, via `GET /api/users/config`) and the backend endpoint fails cleanly (`401`, not a crash) with no client ID configured; the success path still needs a real Google OAuth client ID, which this local/academic deployment doesn't have.

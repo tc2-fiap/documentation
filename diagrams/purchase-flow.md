@@ -12,7 +12,7 @@ sequenceDiagram
     participant N as notifications-api
 
     C->>O: POST /api/orders {GameIds}
-    O->>Cat: GET /api/games/{id}  (síncrono, uma vez por jogo pedido)
+    O->>Cat: GET /api/catalog/{id}  (síncrono, uma vez por jogo pedido)
     Cat-->>O: preço
     O->>O: cria Order (Pending) com um OrderItem por jogo, adiciona OrderEvent
     O->>R: publica OrderPlacedEvent {GameIds, TotalPrice} (mesma transação — outbox)

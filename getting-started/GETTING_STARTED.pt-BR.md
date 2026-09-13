@@ -19,18 +19,18 @@ Necessário apenas se você também quiser rodar um único serviço de forma ind
 
 ## 1. Clonar os repositórios
 
-Este projeto está dividido em oito repositórios independentes no GitHub, sob [`github.com/tc2-fiap`](https://github.com/tc2-fiap) — veja [`../README.pt-BR.md`](../README.pt-BR.md) para a visão completa e o que cada um possui. Para rodar o sistema em si, só sete são necessários: os cinco serviços de backend, o `frontend` e o `orchestration` (`documentation` — este repositório — e o `base-project`, o monólito de referência à parte, não fazem parte do sistema em execução).
+Este projeto está dividido em nove repositórios independentes no GitHub, sob [`github.com/tc2-fiap`](https://github.com/tc2-fiap) — veja [`../README.pt-BR.md`](../README.pt-BR.md) para a visão completa e o que cada um possui. Para rodar o sistema em si, só oito são necessários: os seis serviços de backend, o `frontend` e o `orchestration` (`documentation` — este repositório — e o `base-project`, o monólito de referência à parte, não fazem parte do sistema em execução).
 
-O chart Helm do `orchestration` espera que os outros seis estejam como **diretórios irmãos** no disco — as dependências do seu `Chart.yaml` são caminhos relativos literais (`file://../users-api/k8s`, e assim por diante para cada serviço), não uma busca em um registro. Clone os sete em um diretório pai vazio, mantendo os nomes de pasta padrão que o `git clone` já usa:
+O chart Helm do `orchestration` espera que os outros sete estejam como **diretórios irmãos** no disco — as dependências do seu `Chart.yaml` são caminhos relativos literais (`file://../users-api/k8s`, e assim por diante para cada serviço), não uma busca em um registro. Clone os oito em um diretório pai vazio, mantendo os nomes de pasta padrão que o `git clone` já usa:
 
 ```bash
 mkdir fiap-games && cd fiap-games
-for repo in users-api catalog-api orders-api payments-api notifications-api frontend orchestration; do
+for repo in users-api catalog-api orders-api payments-api notifications-api platform-api frontend orchestration; do
   git clone https://github.com/tc2-fiap/$repo.git
 done
 ```
 
-Todo comando a partir daqui roda a partir desse diretório pai (o que agora contém os sete como irmãos), a menos que um passo diga o contrário.
+Todo comando a partir daqui roda a partir desse diretório pai (o que agora contém os oito como irmãos), a menos que um passo diga o contrário.
 
 ## 2. Criar o cluster
 
@@ -54,7 +54,7 @@ Esse `kubectl wait` geralmente leva cerca de 30 segundos — a imagem do control
 
 ## 3. Construir e carregar as imagens
 
-Cada serviço tem seu próprio `Dockerfile` — os cinco serviços de backend têm o deles em `<repo>/src/FiapGames.<Nome>.Api/Dockerfile`, o do `frontend` fica na raiz do próprio repositório — e o chart espera que as imagens resultantes já estejam no cluster; nada aqui puxa de um registry. Construa cada uma com o nome que o próprio `k8s/values.yaml` do serviço espera (`repository: <nome>`, `tag: latest`) e carregue-as diretamente no containerd do `kind`:
+Cada serviço tem seu próprio `Dockerfile` — os seis serviços de backend têm o deles em `<repo>/src/FiapGames.<Nome>.Api/Dockerfile`, o do `frontend` fica na raiz do próprio repositório — e o chart espera que as imagens resultantes já estejam no cluster; nada aqui puxa de um registry. Construa cada uma com o nome que o próprio `k8s/values.yaml` do serviço espera (`repository: <nome>`, `tag: latest`) e carregue-as diretamente no containerd do `kind`:
 
 ```bash
 docker build -t users-api:latest         users-api/src/FiapGames.Users.Api
@@ -62,10 +62,11 @@ docker build -t catalog-api:latest       catalog-api/src/FiapGames.Catalog.Api
 docker build -t orders-api:latest        orders-api/src/FiapGames.Orders.Api
 docker build -t payments-api:latest      payments-api/src/FiapGames.Payments.Api
 docker build -t notifications-api:latest notifications-api/src/FiapGames.Notifications.Api
+docker build -t platform-api:latest      platform-api/src/FiapGames.Platform.Api
 docker build -t frontend:latest          frontend
 
 kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
-  payments-api:latest notifications-api:latest frontend:latest --name fiap-games
+  payments-api:latest notifications-api:latest platform-api:latest frontend:latest --name fiap-games
 ```
 
 Verifique se cada imagem foi de fato construída e carregada no containerd do cluster antes de seguir em frente — é a checagem que teria pego o `ImagePullBackOff` da tabela de Solução de problemas antes mesmo do `helm install` rodar:
@@ -73,7 +74,7 @@ Verifique se cada imagem foi de fato construída e carregada no containerd do cl
 ```bash
 NODE=fiap-games-control-plane
 LOADED=$(docker exec "$NODE" crictl images)
-for img in users-api catalog-api orders-api payments-api notifications-api frontend; do
+for img in users-api catalog-api orders-api payments-api notifications-api platform-api frontend; do
   if ! docker image inspect "${img}:latest" >/dev/null 2>&1; then
     echo "✗ ${img}:latest — não foi construída localmente"
   elif ! echo "$LOADED" | grep -qE "^docker.io/library/${img}\s+latest\s"; then
@@ -84,7 +85,7 @@ for img in users-api catalog-api orders-api payments-api notifications-api front
 done
 ```
 
-Todas as seis linhas devem mostrar `✓` (o script usa `${img}:latest` em vez de `$img:latest` de propósito — no zsh, `$var:latest` sem chaves é interpretado como o modificador de histórico `:l` aplicado a `$var`, corrompendo silenciosamente a string para `users-apiatest`). Repita este passo inteiro (reconstruir e recarregar) depois de alterar o código de qualquer serviço — é o `kind load docker-image` que efetivamente leva uma nova build até o cluster; um `docker build` isolado é invisível para ele.
+Todas as sete linhas devem mostrar `✓` (o script usa `${img}:latest` em vez de `$img:latest` de propósito — no zsh, `$var:latest` sem chaves é interpretado como o modificador de histórico `:l` aplicado a `$var`, corrompendo silenciosamente a string para `users-apiatest`). Repita este passo inteiro (reconstruir e recarregar) depois de alterar o código de qualquer serviço — é o `kind load docker-image` que efetivamente leva uma nova build até o cluster; um `docker build` isolado é invisível para ele.
 
 ## 4. Instalar o sistema
 
@@ -94,9 +95,9 @@ helm dependency update
 helm install fiap-games .
 ```
 
-`helm dependency update` é obrigatório depois de clonar (ou depois de qualquer alteração em um subchart) — é o que efetivamente resolve as seis dependências `file://../*/k8s` do `Chart.yaml` em `charts/*.tgz` para o Helm instalar.
+`helm dependency update` é obrigatório depois de clonar (ou depois de qualquer alteração em um subchart) — é o que efetivamente resolve as sete dependências `file://../*/k8s` do `Chart.yaml` em `charts/*.tgz` para o Helm instalar.
 
-Isso sobe 8 pods: Postgres, RabbitMQ, os cinco serviços de backend e o frontend, todos no namespace `fiap-games`, todos conectados a um único Ingress em `http://localhost`.
+Isso sobe 9 pods: Postgres, RabbitMQ, os seis serviços de backend e o frontend, todos no namespace `fiap-games`, todos conectados a um único Ingress em `http://localhost`.
 
 ## 5. Verificar
 
@@ -104,7 +105,7 @@ Isso sobe 8 pods: Postgres, RabbitMQ, os cinco serviços de backend e o frontend
 kubectl get pods -n fiap-games
 ```
 
-Espere 8 pods, todos `Running`, todos com `RESTARTS` em `0`. Um reinício aqui quase sempre significa que um serviço iniciou antes do Postgres ou do RabbitMQ estarem prontos — todo serviço com banco carrega um init container `wait-for-postgres` justamente para evitar isso, então um reinício é um sinal real que vale investigar, não algo transitório para simplesmente tentar de novo.
+Espere 9 pods, todos `Running`, todos com `RESTARTS` em `0`. Um reinício aqui quase sempre significa que um serviço iniciou antes do Postgres ou do RabbitMQ estarem prontos — todo serviço com banco carrega um init container `wait-for-postgres` justamente para evitar isso, então um reinício é um sinal real que vale investigar, não algo transitório para simplesmente tentar de novo. O `platform-api` não tem banco de dados, então não tem esse init container nem esse modo de falha.
 
 ```bash
 kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
@@ -150,8 +151,8 @@ Acompanhe `kubectl logs -n fiap-games deploy/notifications-api -f` em outro term
 O `catalog-api` se auto-semeia com 8 jogos reais (capas reais do Steam, preços realistas em BRL) na primeira vez que inicia contra um banco vazio, então já existe algo para navegar sem criar nada manualmente. No navegador isso passa por um carrinho e uma etapa de confirmação de checkout (veja [O mesmo fluxo em um navegador](#o-mesmo-fluxo-em-um-navegador) mais abaixo); direto na API, uma única chamada cria o pedido:
 
 ```bash
-curl -s $BASE/api/games -H "Authorization: Bearer $TOKEN" | jq
-GAME_ID=$(curl -s $BASE/api/games -H "Authorization: Bearer $TOKEN" | jq -r '.items[0].id')
+curl -s $BASE/api/catalog -H "Authorization: Bearer $TOKEN" | jq
+GAME_ID=$(curl -s $BASE/api/catalog -H "Authorization: Bearer $TOKEN" | jq -r '.items[0].id')
 
 ORDER=$(curl -s -X POST $BASE/api/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"gameIds\": [\"$GAME_ID\"]}")
 echo $ORDER | jq
@@ -204,6 +205,12 @@ curl -s $BASE/api/payments/$ORDER_ID -H "Authorization: Bearer $ADMIN_TOKEN" | j
 curl -s "$BASE/api/notifications?orderId=$ORDER_ID" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 ```
 
+Um admin também pode listar todo Pod do cluster — o único endpoint apoiado em RBAC do Kubernetes em vez do Postgres (`notes.md` 75):
+
+```bash
+curl -s $BASE/api/platform/admin/pods -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+```
+
 Uma conta não-admin também já vem semeada para o fluxo comum de compra, sem precisar de cadastro (`player.email`/`player.password` do `values.yaml` — `player@fiapgames.local` / `player-dev-password-change-me` por padrão).
 
 As respostas de pagamentos e notificações incluem os payloads reais de request/response trocados com o gateway e o provedor de e-mail — JSON real, não um resumo, mesmo para o gateway simulado (entrada de trilha de auditoria do `notes.md`). Confirme que a fronteira se mantém — as mesmas quatro chamadas com `$TOKEN` (um usuário não-admin) em vez de `$ADMIN_TOKEN` devem retornar `403`.
@@ -225,7 +232,7 @@ Cada um é paginado (`page`/`pageSize`, limitado a 100) e aceita filtros opciona
 open http://localhost   # ou apenas navegue até lá
 ```
 
-Cadastre-se ou faça login (um botão de login com Google aparece automaticamente só se `Google:ClientId` estiver configurado — ver `notes.md` 28). Adicione um ou mais jogos ao carrinho a partir do catálogo e revise em `/cart`, ou use `Comprar agora` em um único jogo — dos dois jeitos você chega na mesma página de confirmação `/checkout` antes de qualquer pedido ser de fato criado: uma revisão item a item (capa, título, gênero/plataforma de cada jogo) e o total em BRL e em USD. Ao confirmar, você chega na página do pedido: os mesmos itens, uma caixa de status do pedido e do pagamento, o total, e — se um gateway PIX real estiver configurado — um QR code para escanear. A transição `Pending` → `Paid`/`Failed` aparece no instante em que acontece, entregue por uma conexão Server-Sent Events em vez de consultada por polling — diferente do laço `watch` com `$ORDER_ID` acima, que é só uma forma conveniente de observar essa mesma transição pela linha de comando (`notes.md` 53). Ao entrar como o admin semeado, aparecem três links de navegação: a visão de todos os pedidos (e sua página de detalhe por pedido, que compõe os mesmos quatro endpoints restritos a um pedido acima em uma única tela), "Eventos do Sistema" — a página `/admin/events` das chamadas curl acima, com filtros em dropdown por origem, tipo e categoria, mais um intervalo de datas, e um payload JSON bruto expansível em cada linha ao clicar — e "Gerenciar Jogos" (`/admin/games`), uma tabela filtrável do catálogo com Editar e Excluir em cada linha, mais um botão "Criar jogo".
+Cadastre-se ou faça login (um botão de login com Google aparece automaticamente só se `Google:ClientId` estiver configurado — ver `notes.md` 28). Adicione um ou mais jogos ao carrinho a partir do catálogo e revise em `/cart`, ou use `Comprar agora` em um único jogo — dos dois jeitos você chega na mesma página de confirmação `/checkout` antes de qualquer pedido ser de fato criado: uma revisão item a item (capa, título, gênero/plataforma de cada jogo) e o total em BRL e em USD. Ao confirmar, você chega na página do pedido: os mesmos itens, uma caixa de status do pedido e do pagamento, o total, e — se um gateway PIX real estiver configurado — um QR code para escanear. A transição `Pending` → `Paid`/`Failed` aparece no instante em que acontece, entregue por uma conexão Server-Sent Events em vez de consultada por polling — diferente do laço `watch` com `$ORDER_ID` acima, que é só uma forma conveniente de observar essa mesma transição pela linha de comando (`notes.md` 53). Ao entrar como o admin semeado, aparecem quatro links de navegação: a visão de todos os pedidos (e sua página de detalhe por pedido, que compõe os mesmos quatro endpoints restritos a um pedido acima em uma única tela), "Eventos do Sistema" — a página `/admin/events` das chamadas curl acima, com filtros em dropdown por origem, tipo e categoria, mais um intervalo de datas, e um payload JSON bruto expansível em cada linha ao clicar — "Gerenciar Jogos" (`/admin/games`), uma tabela filtrável do catálogo com Editar e Excluir em cada linha, mais um botão "Criar jogo" — e "Saúde do Sistema" (`/admin/system`), que chama o endpoint `/version` de cada serviço (`sha`/`buildTime`, alcançável ou não) e o `GET /api/platform/admin/pods` do `platform-api` para uma tabela de pods ao vivo, os mesmos dados das duas chamadas curl acima em duas telas.
 
 O cabeçalho tem uma alternância EN/PT, visível mesmo antes de fazer login. Trocar para português sempre mostra o BRL nativo (ex.: `R$ 29,99`); trocar para inglês converte todo preço do catálogo para o equivalente em USD usando a cotação ao vivo, voltando para BRL se a cotação estiver indisponível — nunca um preço em branco ou quebrado. O carrinho, o checkout e a página do pedido sempre mostram as duas moedas juntas, independente da alternância. A escolha de idioma em si persiste entre recarregamentos (`notes.md` 35, 36, 39).
 
@@ -251,7 +258,7 @@ Todo repositório de backend e o frontend também rodam sozinhos via seu própri
 |---|---|
 | Um pod reinicia uma vez na instalação | Quase sempre é a prontidão do Postgres/RabbitMQ — verifique `kubectl logs` da instância anterior daquele pod (`kubectl logs -p`) antes de supor que é um bug de verdade; o init container `wait-for-postgres` deveria prevenir isso para o Postgres, mas o RabbitMQ não tem uma proteção equivalente (o MassTransit tenta novamente a própria conexão) |
 | `helm install` reclama de um chart archive faltando | Rode `helm dependency update` em `orchestration/` primeiro — as dependências do chart guarda-chuva são caminhos locais `file://` que precisam ser resolvidos em `charts/*.tgz` |
-| `helm dependency update` não consegue resolver uma dependência (`../users-api/k8s` não encontrado, etc.) | Os seis repositórios irmãos precisam estar clonados ao lado de `orchestration/`, com seus nomes de pasta padrão — veja o [passo 1](#1-clonar-os-repositórios) |
+| `helm dependency update` não consegue resolver uma dependência (`../users-api/k8s` não encontrado, etc.) | Os sete repositórios irmãos precisam estar clonados ao lado de `orchestration/`, com seus nomes de pasta padrão — veja o [passo 1](#1-clonar-os-repositórios) |
 | `curl $BASE/...` dá connection refused | O controlador de ingress ainda não está pronto, ou o cluster kind não foi criado com os mapeamentos de porta em `kind/cluster-config.yaml` |
 | Um pod fica em `ImagePullBackOff`/`ErrImagePull` para `<service>:latest` (`pull access denied, repository does not exist`) | A imagem nunca foi construída nem carregada no cluster — veja o [passo 3](#3-construir-e-carregar-as-imagens); um `docker build` isolado não chega ao containerd do `kind`, só o `kind load docker-image` faz isso |
 | `docker build` imprime `DEPRECATED: The legacy builder is deprecated and will be removed in a future release` | O build ainda termina normalmente — é só um aviso, não uma falha — mas instale o plugin `buildx` (veja Pré-requisitos) para que ele use o BuildKit em vez do builder antigo |

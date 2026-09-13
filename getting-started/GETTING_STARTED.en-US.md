@@ -19,18 +19,18 @@ Only needed if you also want to run a single service standalone instead of the w
 
 ## 1. Clone the repos
 
-This project is split across eight independent GitHub repos under [`github.com/tc2-fiap`](https://github.com/tc2-fiap) — see [`../README.en-US.md`](../README.en-US.md) for the full picture and what each one owns. Running the system itself only needs seven: the five backend services, `frontend`, and `orchestration` (`documentation` — this repo — and the separate `base-project` reference monolith aren't part of the running system).
+This project is split across nine independent GitHub repos under [`github.com/tc2-fiap`](https://github.com/tc2-fiap) — see [`../README.en-US.md`](../README.en-US.md) for the full picture and what each one owns. Running the system itself only needs eight: the six backend services, `frontend`, and `orchestration` (`documentation` — this repo — and the separate `base-project` reference monolith aren't part of the running system).
 
-`orchestration`'s Helm chart expects the other six as **sibling directories** on disk — its `Chart.yaml` dependencies are literal relative paths (`file://../users-api/k8s`, and so on for each service), not a registry lookup. Clone all seven into one empty parent directory, keeping the default folder names `git clone` gives you:
+`orchestration`'s Helm chart expects the other seven as **sibling directories** on disk — its `Chart.yaml` dependencies are literal relative paths (`file://../users-api/k8s`, and so on for each service), not a registry lookup. Clone all eight into one empty parent directory, keeping the default folder names `git clone` gives you:
 
 ```bash
 mkdir fiap-games && cd fiap-games
-for repo in users-api catalog-api orders-api payments-api notifications-api frontend orchestration; do
+for repo in users-api catalog-api orders-api payments-api notifications-api platform-api frontend orchestration; do
   git clone https://github.com/tc2-fiap/$repo.git
 done
 ```
 
-Every command from here on runs from this parent directory (the one now containing all seven as siblings), unless a step says otherwise.
+Every command from here on runs from this parent directory (the one now containing all eight as siblings), unless a step says otherwise.
 
 ## 2. Create the cluster
 
@@ -54,7 +54,7 @@ The `kubectl wait` typically takes around 30 seconds — the controller image ne
 
 ## 3. Build and load the images
 
-Each service ships its own `Dockerfile` — the five backend services have theirs at `<repo>/src/FiapGames.<Name>.Api/Dockerfile`, `frontend`'s is at its repo root — and the chart expects the resulting images already sitting in the cluster; nothing here pulls from a registry. Build each with the name its own `k8s/values.yaml` expects (`repository: <name>`, `tag: latest`), then load them straight into `kind`'s containerd:
+Each service ships its own `Dockerfile` — the six backend services have theirs at `<repo>/src/FiapGames.<Name>.Api/Dockerfile`, `frontend`'s is at its repo root — and the chart expects the resulting images already sitting in the cluster; nothing here pulls from a registry. Build each with the name its own `k8s/values.yaml` expects (`repository: <name>`, `tag: latest`), then load them straight into `kind`'s containerd:
 
 ```bash
 docker build -t users-api:latest         users-api/src/FiapGames.Users.Api
@@ -62,10 +62,11 @@ docker build -t catalog-api:latest       catalog-api/src/FiapGames.Catalog.Api
 docker build -t orders-api:latest        orders-api/src/FiapGames.Orders.Api
 docker build -t payments-api:latest      payments-api/src/FiapGames.Payments.Api
 docker build -t notifications-api:latest notifications-api/src/FiapGames.Notifications.Api
+docker build -t platform-api:latest      platform-api/src/FiapGames.Platform.Api
 docker build -t frontend:latest          frontend
 
 kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
-  payments-api:latest notifications-api:latest frontend:latest --name fiap-games
+  payments-api:latest notifications-api:latest platform-api:latest frontend:latest --name fiap-games
 ```
 
 Verify every image was both built and actually loaded into the cluster's containerd before moving on — this is the check that would have caught the `ImagePullBackOff` failure mode in the Troubleshooting table below, before `helm install` ever ran:
@@ -73,7 +74,7 @@ Verify every image was both built and actually loaded into the cluster's contain
 ```bash
 NODE=fiap-games-control-plane
 LOADED=$(docker exec "$NODE" crictl images)
-for img in users-api catalog-api orders-api payments-api notifications-api frontend; do
+for img in users-api catalog-api orders-api payments-api notifications-api platform-api frontend; do
   if ! docker image inspect "${img}:latest" >/dev/null 2>&1; then
     echo "✗ ${img}:latest — not built locally"
   elif ! echo "$LOADED" | grep -qE "^docker.io/library/${img}\s+latest\s"; then
@@ -84,7 +85,7 @@ for img in users-api catalog-api orders-api payments-api notifications-api front
 done
 ```
 
-All six lines should print `✓` (the script uses `${img}:latest` rather than `$img:latest` deliberately — in zsh, unbraced `$var:latest` is parsed as the `:l` history modifier applied to `$var`, silently mangling the string to `users-apiatest`). Re-run this whole step (rebuild, then reload) after changing any service's code — `kind load docker-image` is what actually gets a new build into the cluster; a plain `docker build` on its own is invisible to it.
+All seven lines should print `✓` (the script uses `${img}:latest` rather than `$img:latest` deliberately — in zsh, unbraced `$var:latest` is parsed as the `:l` history modifier applied to `$var`, silently mangling the string to `users-apiatest`). Re-run this whole step (rebuild, then reload) after changing any service's code — `kind load docker-image` is what actually gets a new build into the cluster; a plain `docker build` on its own is invisible to it.
 
 ## 4. Install the system
 
@@ -94,9 +95,9 @@ helm dependency update
 helm install fiap-games .
 ```
 
-`helm dependency update` is required after cloning (or after any subchart change) — it's what actually resolves the six `file://../*/k8s` dependencies in `Chart.yaml` into `charts/*.tgz` for Helm to install.
+`helm dependency update` is required after cloning (or after any subchart change) — it's what actually resolves the seven `file://../*/k8s` dependencies in `Chart.yaml` into `charts/*.tgz` for Helm to install.
 
-This brings up 8 pods: Postgres, RabbitMQ, and the five backend services plus the frontend, all in the `fiap-games` namespace, all wired to one Ingress at `http://localhost`.
+This brings up 9 pods: Postgres, RabbitMQ, and the six backend services plus the frontend, all in the `fiap-games` namespace, all wired to one Ingress at `http://localhost`.
 
 ## 5. Verify
 
@@ -104,7 +105,7 @@ This brings up 8 pods: Postgres, RabbitMQ, and the five backend services plus th
 kubectl get pods -n fiap-games
 ```
 
-Expect 8 pods, all `Running`, all `RESTARTS` at `0`. A restart here almost always means a service started before Postgres or RabbitMQ was ready — every DB-backed service carries a `wait-for-postgres` init container specifically to prevent that, so a restart is a real signal worth investigating, not a transient to retry past.
+Expect 9 pods, all `Running`, all `RESTARTS` at `0`. A restart here almost always means a service started before Postgres or RabbitMQ was ready — every DB-backed service carries a `wait-for-postgres` init container specifically to prevent that, so a restart is a real signal worth investigating, not a transient to retry past. `platform-api` has no database, so it has no such init container and no such failure mode.
 
 ```bash
 kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
@@ -150,8 +151,8 @@ Watch `kubectl logs -n fiap-games deploy/notifications-api -f` in another termin
 `catalog-api` seeds itself with 8 real games (real Steam cover art, realistic BRL prices) the first time it starts against an empty database, so there's already something to browse without creating anything by hand. In the browser this goes through a cart and a checkout confirmation step (see [The same flow in a browser](#the-same-flow-in-a-browser) below); against the API directly, one call places the order:
 
 ```bash
-curl -s $BASE/api/games -H "Authorization: Bearer $TOKEN" | jq
-GAME_ID=$(curl -s $BASE/api/games -H "Authorization: Bearer $TOKEN" | jq -r '.items[0].id')
+curl -s $BASE/api/catalog -H "Authorization: Bearer $TOKEN" | jq
+GAME_ID=$(curl -s $BASE/api/catalog -H "Authorization: Bearer $TOKEN" | jq -r '.items[0].id')
 
 ORDER=$(curl -s -X POST $BASE/api/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"gameIds\": [\"$GAME_ID\"]}")
 echo $ORDER | jq
@@ -204,6 +205,12 @@ curl -s $BASE/api/payments/$ORDER_ID -H "Authorization: Bearer $ADMIN_TOKEN" | j
 curl -s "$BASE/api/notifications?orderId=$ORDER_ID" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 ```
 
+An admin can also list every Pod in the cluster — the one endpoint backed by Kubernetes RBAC instead of Postgres (`notes.md` 75):
+
+```bash
+curl -s $BASE/api/platform/admin/pods -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+```
+
 A seeded non-admin account is also ready for the ordinary purchase flow, no registration needed (`values.yaml`'s `player.email`/`player.password` — `player@fiapgames.local` / `player-dev-password-change-me` by default).
 
 The payments and notifications responses include the actual request/response payloads exchanged with the gateway and email provider — real JSON, not a summary, even for the simulated gateway (`notes.md`'s audit-trail entry). Confirm the boundary holds — the same four calls with `$TOKEN` (a non-admin) instead of `$ADMIN_TOKEN` should all return `403`.
@@ -225,7 +232,7 @@ Each is paginated (`page`/`pageSize`, capped at 100) and accepts optional filter
 open http://localhost   # or just navigate there
 ```
 
-Register or log in (a Google sign-in button appears automatically only if `Google:ClientId` is configured — see `notes.md` 28). Add one or more games to your cart from the catalog and review them on `/cart`, or use `Buy Now` on a single game — either way you land on the same `/checkout` confirmation page before anything is actually ordered: an itemized review (cover image, title, genre/platform per game) and the total in both BRL and USD. Confirming lands on the order page: the same line items, an order-and-payment-status box, the total, and — if a real PIX gateway is configured — a QR code to scan. The `Pending` → `Paid`/`Failed` transition appears the moment it happens, pushed over a Server-Sent Events connection rather than polled — unlike the `watch`-based `$ORDER_ID` loop above, which is just a convenient way to observe the same transition from the command line (`notes.md` 53). Logging in as the seeded admin surfaces three nav links: the all-orders view (and its per-order detail page, composing the same four order-scoped endpoints above into one screen), "System Events" — the `/admin/events` page from the curl calls above, with dropdown filters for source, kind, and type plus a date range, and a click-to-expand raw JSON payload on every row — and "Manage Games" (`/admin/games`), a filterable table of the catalog with Edit and Delete on every row, plus a "Create game" button.
+Register or log in (a Google sign-in button appears automatically only if `Google:ClientId` is configured — see `notes.md` 28). Add one or more games to your cart from the catalog and review them on `/cart`, or use `Buy Now` on a single game — either way you land on the same `/checkout` confirmation page before anything is actually ordered: an itemized review (cover image, title, genre/platform per game) and the total in both BRL and USD. Confirming lands on the order page: the same line items, an order-and-payment-status box, the total, and — if a real PIX gateway is configured — a QR code to scan. The `Pending` → `Paid`/`Failed` transition appears the moment it happens, pushed over a Server-Sent Events connection rather than polled — unlike the `watch`-based `$ORDER_ID` loop above, which is just a convenient way to observe the same transition from the command line (`notes.md` 53). Logging in as the seeded admin surfaces four nav links: the all-orders view (and its per-order detail page, composing the same four order-scoped endpoints above into one screen), "System Events" — the `/admin/events` page from the curl calls above, with dropdown filters for source, kind, and type plus a date range, and a click-to-expand raw JSON payload on every row — "Manage Games" (`/admin/games`), a filterable table of the catalog with Edit and Delete on every row, plus a "Create game" button — and "System Health" (`/admin/system`), which calls every service's `/version` endpoint (`sha`/`buildTime`, reachable or not) and `platform-api`'s `GET /api/platform/admin/pods` for a live pod table, the same data as the two curl calls above rendered as two screens.
 
 The header carries an EN/PT toggle, visible even before logging in. Toggling to Portuguese always shows native BRL (e.g. `R$ 29,99`); toggling to English converts every catalog price to its USD equivalent using the live quotation, falling back to BRL if the rate lookup is ever unavailable — never a blank or broken price. The cart, checkout, and order pages always show both currencies together regardless of the toggle. The language choice itself persists across a reload (`notes.md` 35, 36, 39).
 
@@ -251,7 +258,7 @@ Every backend repo and the frontend also run alone via their own `docker-compose
 |---|---|
 | A pod restarts once at install | Almost always Postgres/RabbitMQ readiness — check `kubectl logs` for that pod's previous instance (`kubectl logs -p`) before assuming it's a real bug; the `wait-for-postgres` init container should prevent this for Postgres, but RabbitMQ has no equivalent guard (MassTransit retries its own connection) |
 | `helm install` complains about a missing chart archive | Run `helm dependency update` in `orchestration/` first — the umbrella chart's dependencies are local `file://` paths that need resolving into `charts/*.tgz` |
-| `helm dependency update` can't resolve a dependency (`../users-api/k8s` not found, etc.) | The six sibling repos need to be cloned next to `orchestration/`, with their default folder names — see [step 1](#1-clone-the-repos) |
+| `helm dependency update` can't resolve a dependency (`../users-api/k8s` not found, etc.) | The seven sibling repos need to be cloned next to `orchestration/`, with their default folder names — see [step 1](#1-clone-the-repos) |
 | `curl $BASE/...` connection refused | The ingress controller isn't ready yet, or the kind cluster wasn't created with the port mappings in `kind/cluster-config.yaml` |
 | A pod is `ImagePullBackOff`/`ErrImagePull` for `<service>:latest` (`pull access denied, repository does not exist`) | The image was never built and loaded into the cluster — see [step 3](#3-build-and-load-the-images); a plain `docker build` alone doesn't reach `kind`'s containerd, only `kind load docker-image` does |
 | `docker build` prints `DEPRECATED: The legacy builder is deprecated and will be removed in a future release` | The build still completes — this is just a warning, not a failure — but install the `buildx` plugin (see Prerequisites) so it uses BuildKit instead |
