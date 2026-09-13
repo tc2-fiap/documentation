@@ -129,6 +129,18 @@ Everything below goes through the one Ingress base URL — no port-forwarding, n
 BASE=http://localhost
 ```
 
+### In a browser
+
+```bash
+open http://localhost   # or just navigate there
+```
+
+Register or log in with one of the seeded accounts (Admin, to see the admin screens right away; Player, to skip registration) — a Google sign-in button appears automatically only if `Google:ClientId` is configured — see `notes.md` 28. Add one or more games to your cart from the catalog and review them on `/cart`, or use `Buy Now` on a single game — either way you land on the same `/checkout` confirmation page before anything is actually ordered: an itemized review (cover image, title, genre/platform per game) and the total in both BRL and USD. Confirming lands on the order page: the same line items, an order-and-payment-status box, the total, and — if a real PIX gateway is configured — a QR code to scan. The `Pending` → `Paid`/`Failed` transition appears the moment it happens, pushed over a Server-Sent Events connection rather than polled (`notes.md` 53). Logging in as the seeded admin surfaces four nav links: the all-orders view (and its per-order detail page), "System Events" (`/admin/events`) — dropdown filters for source, kind, and type plus a date range, and a click-to-expand raw JSON payload on every row — "Manage Games" (`/admin/games`), a filterable table of the catalog with Edit and Delete on every row, plus a "Create game" button — and "System Health" (`/admin/system`), a live pod table and every service's `/version`.
+
+The header carries an EN/PT toggle, visible even before logging in. Toggling to Portuguese always shows native BRL (e.g. `R$ 29,99`); toggling to English converts every catalog price to its USD equivalent using the live quotation, falling back to BRL if the rate lookup is ever unavailable — never a blank or broken price. The cart, checkout, and order pages always show both currencies together regardless of the toggle. The language choice itself persists across a reload (`notes.md` 35, 36, 39).
+
+The rest of this section repeats the same flow directly against the API (`curl`), call by call — useful for seeing exactly what each screen fires under the hood, and for what the UI doesn't expose (the full audit trail, the pod listing).
+
 ### Register and log in
 
 `POST /api/users/register` — and the frontend's `/register` page behind it — always creates a `Player` account; there is no way to self-register as `Admin`. The only way to get an Admin account is to already have one and promote someone else via `PUT /api/users/{id}/role` (admin-only) — which is why `users-api` already seeds one Admin (and, for convenience, one Player) account on first startup:
@@ -170,7 +182,7 @@ From here on, `$TOKEN` can be either the seeded Player's or the freshly-register
 
 ### Browse the catalog and buy a game
 
-`catalog-api` seeds itself with 30 games (mostly real ones, with real Steam cover art and realistic BRL prices) the first time it starts against an empty database, so there's already something to browse without creating anything by hand — including one fictional one, "Corrupted Save: QA Edition," deliberately priced to always fail at payment (see below). In the browser this goes through a cart and a checkout confirmation step (see [The same flow in a browser](#the-same-flow-in-a-browser) below); against the API directly, one call places the order:
+`catalog-api` seeds itself with 30 games (mostly real ones, with real Steam cover art and realistic BRL prices) the first time it starts against an empty database, so there's already something to browse without creating anything by hand — including one fictional one, "Corrupted Save: QA Edition," deliberately priced to always fail at payment (see below). In the browser this goes through a cart and a checkout confirmation step (see [In a browser](#in-a-browser) above); against the API directly, one call places the order:
 
 ```bash
 curl -s $BASE/api/catalog -H "Authorization: Bearer $TOKEN" | jq
@@ -245,16 +257,6 @@ curl -s "$BASE/api/notifications/admin" -H "Authorization: Bearer $ADMIN_TOKEN" 
 ```
 
 Each is paginated (`page`/`pageSize`, capped at 100) and accepts optional filters — a `from`/`to` UTC date range on all four, plus `eventType` (users/orders), `status` (payments), and `type`/`status` (notifications). `catalog-api` has no equivalent endpoint — it publishes and consumes nothing, so there's nothing to list. Same `403` boundary check applies here too.
-
-### The same flow in a browser
-
-```bash
-open http://localhost   # or just navigate there
-```
-
-Register or log in with one of the seeded accounts (Admin, to see the admin screens right away; Player, to skip registration) — a Google sign-in button appears automatically only if `Google:ClientId` is configured — see `notes.md` 28. Add one or more games to your cart from the catalog and review them on `/cart`, or use `Buy Now` on a single game — either way you land on the same `/checkout` confirmation page before anything is actually ordered: an itemized review (cover image, title, genre/platform per game) and the total in both BRL and USD. Confirming lands on the order page: the same line items, an order-and-payment-status box, the total, and — if a real PIX gateway is configured — a QR code to scan. The `Pending` → `Paid`/`Failed` transition appears the moment it happens, pushed over a Server-Sent Events connection rather than polled — unlike the `watch`-based `$ORDER_ID` loop above, which is just a convenient way to observe the same transition from the command line (`notes.md` 53). Logging in as the seeded admin surfaces four nav links: the all-orders view (and its per-order detail page, composing the same four order-scoped endpoints above into one screen), "System Events" — the `/admin/events` page from the curl calls above, with dropdown filters for source, kind, and type plus a date range, and a click-to-expand raw JSON payload on every row — "Manage Games" (`/admin/games`), a filterable table of the catalog with Edit and Delete on every row, plus a "Create game" button — and "System Health" (`/admin/system`), which calls every service's `/version` endpoint (`sha`/`buildTime`, reachable or not) and `platform-api`'s `GET /api/platform/admin/pods` for a live pod table, the same data as the two curl calls above rendered as two screens.
-
-The header carries an EN/PT toggle, visible even before logging in. Toggling to Portuguese always shows native BRL (e.g. `R$ 29,99`); toggling to English converts every catalog price to its USD equivalent using the live quotation, falling back to BRL if the rate lookup is ever unavailable — never a blank or broken price. The cart, checkout, and order pages always show both currencies together regardless of the toggle. The language choice itself persists across a reload (`notes.md` 35, 36, 39).
 
 ## 7. Tear down
 

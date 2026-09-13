@@ -22,7 +22,7 @@ Necessário apenas se você também quiser rodar um único serviço de forma ind
 Este projeto está dividido em nove repositórios independentes no GitHub, sob [`github.com/tc2-fiap`](https://github.com/tc2-fiap) — veja [`../README.pt-BR.md`](../README.pt-BR.md) para a visão completa e o que cada um possui. Para rodar o sistema em si, só oito são necessários: os seis serviços de backend, o `frontend` e o `orchestration` (`documentation` — este repositório — e o `base-project`, o monólito de referência à parte, não fazem parte do sistema em execução).
 
 O chart Helm do `orchestration` espera que os outros sete estejam como **diretórios irmãos** no disco — as dependências do seu `Chart.yaml` são caminhos relativos literais (`file://../users-api/k8s`, e assim por diante para cada serviço), não uma busca em um registro. Clone os oito em um diretório pai vazio, mantendo os nomes de pasta padrão que o `git clone` já usa:
-
+kk
 ```bash
 mkdir fiap-games && cd fiap-games
 for repo in users-api catalog-api orders-api payments-api notifications-api platform-api frontend orchestration; do
@@ -129,6 +129,18 @@ Tudo abaixo passa pela única URL base do Ingress — sem port-forward, sem host
 BASE=http://localhost
 ```
 
+### Pelo navegador
+
+```bash
+open http://localhost   # ou apenas navegue até lá
+```
+
+Cadastre-se ou faça login com uma das contas semeadas (a Admin, pra ver as telas de admin direto; a Player, pra pular o cadastro) — um botão de login com Google aparece automaticamente só se `Google:ClientId` estiver configurado — ver `notes.md` 28. Adicione um ou mais jogos ao carrinho a partir do catálogo e revise em `/cart`, ou use `Comprar agora` em um único jogo — dos dois jeitos você chega na mesma página de confirmação `/checkout` antes de qualquer pedido ser de fato criado: uma revisão item a item (capa, título, gênero/plataforma de cada jogo) e o total em BRL e em USD. Ao confirmar, você chega na página do pedido: os mesmos itens, uma caixa de status do pedido e do pagamento, o total, e — se um gateway PIX real estiver configurado — um QR code para escanear. A transição `Pending` → `Paid`/`Failed` aparece no instante em que acontece, entregue por uma conexão Server-Sent Events em vez de consultada por polling (`notes.md` 53). Ao entrar como o admin semeado, aparecem quatro links de navegação: a visão de todos os pedidos (e sua página de detalhe por pedido), "Eventos do Sistema" (`/admin/events`) — filtros em dropdown por origem, tipo e categoria, mais um intervalo de datas, e um payload JSON bruto expansível em cada linha ao clicar — "Gerenciar Jogos" (`/admin/games`), uma tabela filtrável do catálogo com Editar e Excluir em cada linha, mais um botão "Criar jogo" — e "Saúde do Sistema" (`/admin/system`), pods ao vivo e o `/version` de cada serviço.
+
+O cabeçalho tem uma alternância EN/PT, visível mesmo antes de fazer login. Trocar para português sempre mostra o BRL nativo (ex.: `R$ 29,99`); trocar para inglês converte todo preço do catálogo para o equivalente em USD usando a cotação ao vivo, voltando para BRL se a cotação estiver indisponível — nunca um preço em branco ou quebrado. O carrinho, o checkout e a página do pedido sempre mostram as duas moedas juntas, independente da alternância. A escolha de idioma em si persiste entre recarregamentos (`notes.md` 35, 36, 39).
+
+O restante desta seção repete o mesmo fluxo direto pela API (`curl`), chamada a chamada — útil pra ver exatamente o que cada tela dispara por trás dos panos, e para o que a UI não expõe (a trilha de auditoria completa, a listagem de pods).
+
 ### Cadastrar e fazer login
 
 `POST /api/users/register` — e a página `/register` do frontend por trás dele — sempre cria uma conta com a role `Player`; não existe um jeito de se auto-cadastrar como `Admin`. A única forma de conseguir uma conta Admin é já ter uma e promover outra pessoa via `PUT /api/users/{id}/role` (admin-only) — por isso o `users-api` já semeia uma conta Admin (e, por conveniência, uma Player) na primeira subida:
@@ -170,7 +182,7 @@ Daqui em diante, `$TOKEN` pode ser tanto o da conta Player semeada quanto o da c
 
 ### Navegar no catálogo e comprar um jogo
 
-O `catalog-api` se auto-semeia com 30 jogos (a maioria reais, com capas reais do Steam e preços realistas em BRL) na primeira vez que inicia contra um banco vazio, então já existe algo para navegar sem criar nada manualmente — inclusive um jogo fictício, "Corrupted Save: QA Edition", propositalmente precificado em `49.13` para sempre falhar no pagamento (veja a seção abaixo). No navegador isso passa por um carrinho e uma etapa de confirmação de checkout (veja [O mesmo fluxo em um navegador](#o-mesmo-fluxo-em-um-navegador) mais abaixo); direto na API, uma única chamada cria o pedido:
+O `catalog-api` se auto-semeia com 30 jogos (a maioria reais, com capas reais do Steam e preços realistas em BRL) na primeira vez que inicia contra um banco vazio, então já existe algo para navegar sem criar nada manualmente — inclusive um jogo fictício, "Corrupted Save: QA Edition", propositalmente precificado em `49.13` para sempre falhar no pagamento (veja a seção abaixo). No navegador isso passa por um carrinho e uma etapa de confirmação de checkout (veja [Pelo navegador](#pelo-navegador) acima); direto na API, uma única chamada cria o pedido:
 
 ```bash
 curl -s $BASE/api/catalog -H "Authorization: Bearer $TOKEN" | jq
@@ -245,16 +257,6 @@ curl -s "$BASE/api/notifications/admin" -H "Authorization: Bearer $ADMIN_TOKEN" 
 ```
 
 Cada um é paginado (`page`/`pageSize`, limitado a 100) e aceita filtros opcionais — um intervalo de datas `from`/`to` (UTC) nos quatro, além de `eventType` (users/orders), `status` (payments) e `type`/`status` (notifications). O `catalog-api` não tem um endpoint equivalente — ele não publica nem consome nada, então não há o que listar. A mesma verificação de fronteira `403` também se aplica aqui.
-
-### O mesmo fluxo em um navegador
-
-```bash
-open http://localhost   # ou apenas navegue até lá
-```
-
-Cadastre-se ou faça login com uma das contas semeadas (a Admin, pra ver as telas de admin direto; a Player, pra pular o cadastro) — um botão de login com Google aparece automaticamente só se `Google:ClientId` estiver configurado — ver `notes.md` 28. Adicione um ou mais jogos ao carrinho a partir do catálogo e revise em `/cart`, ou use `Comprar agora` em um único jogo — dos dois jeitos você chega na mesma página de confirmação `/checkout` antes de qualquer pedido ser de fato criado: uma revisão item a item (capa, título, gênero/plataforma de cada jogo) e o total em BRL e em USD. Ao confirmar, você chega na página do pedido: os mesmos itens, uma caixa de status do pedido e do pagamento, o total, e — se um gateway PIX real estiver configurado — um QR code para escanear. A transição `Pending` → `Paid`/`Failed` aparece no instante em que acontece, entregue por uma conexão Server-Sent Events em vez de consultada por polling — diferente do laço `watch` com `$ORDER_ID` acima, que é só uma forma conveniente de observar essa mesma transição pela linha de comando (`notes.md` 53). Ao entrar como o admin semeado, aparecem quatro links de navegação: a visão de todos os pedidos (e sua página de detalhe por pedido, que compõe os mesmos quatro endpoints restritos a um pedido acima em uma única tela), "Eventos do Sistema" — a página `/admin/events` das chamadas curl acima, com filtros em dropdown por origem, tipo e categoria, mais um intervalo de datas, e um payload JSON bruto expansível em cada linha ao clicar — "Gerenciar Jogos" (`/admin/games`), uma tabela filtrável do catálogo com Editar e Excluir em cada linha, mais um botão "Criar jogo" — e "Saúde do Sistema" (`/admin/system`), que chama o endpoint `/version` de cada serviço (`sha`/`buildTime`, alcançável ou não) e o `GET /api/platform/admin/pods` do `platform-api` para uma tabela de pods ao vivo, os mesmos dados das duas chamadas curl acima em duas telas.
-
-O cabeçalho tem uma alternância EN/PT, visível mesmo antes de fazer login. Trocar para português sempre mostra o BRL nativo (ex.: `R$ 29,99`); trocar para inglês converte todo preço do catálogo para o equivalente em USD usando a cotação ao vivo, voltando para BRL se a cotação estiver indisponível — nunca um preço em branco ou quebrado. O carrinho, o checkout e a página do pedido sempre mostram as duas moedas juntas, independente da alternância. A escolha de idioma em si persiste entre recarregamentos (`notes.md` 35, 36, 39).
 
 ## 7. Encerrar o ambiente
 
