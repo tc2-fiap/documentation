@@ -76,7 +76,7 @@ Não use essa comparação para nada. Foi testada, parecia razoável, e não fun
 #11 CACHED
 ```
 
-**2. O endpoint `/version`.** Os cinco serviços de backend (`users-api`, `catalog-api`, `orders-api`, `payments-api`, `notifications-api`) expõem `GET /version`, retornando o commit exato e o horário de build embutidos naquela imagem específica:
+**2. O endpoint `/version`.** Os seis serviços de backend (`users-api`, `catalog-api`, `orders-api`, `payments-api`, `notifications-api`, `platform-api`) expõem `GET /version`, retornando o commit exato e o horário de build embutidos naquela imagem específica:
 
 ```json
 {"sha": "5eb124839f1e4962b2e911e64a1241daad5df858", "buildTime": "2026-09-13T00:23:41Z"}
@@ -97,7 +97,7 @@ Sem os dois `--build-arg`, o endpoint continua funcionando — só reporta `"unk
 
 ## Como alcançar `/health` e `/version` — e por que precisa de `kubectl port-forward`
 
-Nenhum dos dois endpoints é alcançável pelo navegador via `http://localhost/...`, e isso é proposital, não um descuido: o Ingress (`orchestration/templates/ingress.yaml`) só roteia prefixos de path específicos para cada backend — `/api/users`, `/api/games`, `/api/quotations`, `/api/orders`, `/api/library`, `/api/payments`, `/api/notifications`, e `/` (o frontend). `/health` e `/version` ficam na raiz de cada serviço, fora de todos esses prefixos, então uma requisição a, por exemplo, `/api/catalog/health` não chega ao `catalog-api` de jeito nenhum — ela cai na regra `/` e acaba no roteador do próprio frontend, que então redireciona para algum lugar sensato por não reconhecer essa rota.
+Nenhum dos dois endpoints é alcançável pelo navegador via `http://localhost/...`, e isso é proposital, não um descuido: o Ingress (`orchestration/templates/ingress.yaml`) só roteia prefixos de path específicos para cada backend — `/api/users`, `/api/catalog`, `/api/quotations`, `/api/orders`, `/api/library`, `/api/payments`, `/api/notifications`, `/api/platform`, e `/` (o frontend). `/health` e `/version` ficam na raiz de cada serviço, fora de todos esses prefixos, então uma requisição a, por exemplo, `/api/catalog/health` não chega ao `catalog-api` de jeito nenhum — ela cai na regra `/` e acaba no roteador do próprio frontend, que então redireciona para algum lugar sensato por não reconhecer essa rota.
 
 As próprias sondas de liveness/readiness do Kubernetes alcançam `/health` diretamente (IP do pod, sem passar pelo Ingress), então isso nunca foi um problema pra elas — só vira um problema no momento em que uma pessoa quer checar `/health` ou `/version` manualmente. O `kubectl port-forward` abre um túnel direto de uma porta local até o pod, contornando o Ingress inteiramente.
 
@@ -111,6 +111,7 @@ kubectl get svc -n fiap-games
 # orders-api          ClusterIP   10.96.x.x       8080/TCP
 # payments-api        ClusterIP   10.96.x.x       8080/TCP
 # notifications-api   ClusterIP   10.96.x.x       8080/TCP
+# platform-api        ClusterIP   10.96.x.x       8080/TCP
 # ...
 ```
 

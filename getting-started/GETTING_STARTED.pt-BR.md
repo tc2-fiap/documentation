@@ -56,18 +56,24 @@ Esse `kubectl wait` geralmente leva cerca de 30 segundos — a imagem do control
 
 Cada serviço tem seu próprio `Dockerfile` — os seis serviços de backend têm o deles em `<repo>/src/FiapGames.<Nome>.Api/Dockerfile`, o do `frontend` fica na raiz do próprio repositório — e o chart espera que as imagens resultantes já estejam no cluster; nada aqui puxa de um registry. Construa cada uma com o nome que o próprio `k8s/values.yaml` do serviço espera (`repository: <nome>`, `tag: latest`) e carregue-as diretamente no containerd do `kind`:
 
+Cada backend também tem dois `ARG`s de Dockerfile (`BUILD_SHA`, `BUILD_TIME`) que alimentam o endpoint `GET /version` de cada serviço — sem eles o valor cai no default `"unknown"` em vez de falhar, então é fácil não perceber que ficaram de fora até olhar a página "Saúde do Sistema" no admin. Passe os dois explicitamente (veja [`DEPLOY_VERIFICATION.pt-BR.md`](../technical-assessment/DEPLOY_VERIFICATION.pt-BR.md) para o porquê):
+
 ```bash
-docker build -t users-api:latest         users-api/src/FiapGames.Users.Api
-docker build -t catalog-api:latest       catalog-api/src/FiapGames.Catalog.Api
-docker build -t orders-api:latest        orders-api/src/FiapGames.Orders.Api
-docker build -t payments-api:latest      payments-api/src/FiapGames.Payments.Api
-docker build -t notifications-api:latest notifications-api/src/FiapGames.Notifications.Api
-docker build -t platform-api:latest      platform-api/src/FiapGames.Platform.Api
-docker build -t frontend:latest          frontend
+BUILDTIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+docker build --build-arg BUILD_SHA=$(git -C users-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t users-api:latest users-api/src/FiapGames.Users.Api
+docker build --build-arg BUILD_SHA=$(git -C catalog-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t catalog-api:latest catalog-api/src/FiapGames.Catalog.Api
+docker build --build-arg BUILD_SHA=$(git -C orders-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t orders-api:latest orders-api/src/FiapGames.Orders.Api
+docker build --build-arg BUILD_SHA=$(git -C payments-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t payments-api:latest payments-api/src/FiapGames.Payments.Api
+docker build --build-arg BUILD_SHA=$(git -C notifications-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t notifications-api:latest notifications-api/src/FiapGames.Notifications.Api
+docker build --build-arg BUILD_SHA=$(git -C platform-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t platform-api:latest platform-api/src/FiapGames.Platform.Api
+docker build -t frontend:latest frontend
 
 kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
   payments-api:latest notifications-api:latest platform-api:latest frontend:latest --name fiap-games
 ```
+
+(`frontend` não usa esse mecanismo — a versão dele vem do `package.json`, não de um `ARG` de build; `notes.md` 77.)
 
 Verifique se cada imagem foi de fato construída e carregada no containerd do cluster antes de seguir em frente — é a checagem que teria pego o `ImagePullBackOff` da tabela de Solução de problemas antes mesmo do `helm install` rodar:
 
@@ -289,6 +295,7 @@ Todo repositório de backend e o frontend também rodam sozinhos via seu própri
 | `curl $BASE/...` dá connection refused | O controlador de ingress ainda não está pronto, ou o cluster kind não foi criado com os mapeamentos de porta em `kind/cluster-config.yaml` |
 | Um pod fica em `ImagePullBackOff`/`ErrImagePull` para `<service>:latest` (`pull access denied, repository does not exist`) | A imagem nunca foi construída nem carregada no cluster — veja o [passo 3](#3-construir-e-carregar-as-imagens); um `docker build` isolado não chega ao containerd do `kind`, só o `kind load docker-image` faz isso |
 | `docker build` imprime `DEPRECATED: The legacy builder is deprecated and will be removed in a future release` | O build ainda termina normalmente — é só um aviso, não uma falha — mas instale o plugin `buildx` (veja Pré-requisitos) para que ele use o BuildKit em vez do builder antigo |
+| A página "Saúde do Sistema" (`/admin/system`) mostra `sha`/`buildTime` como `unknown` para algum serviço | As imagens foram construídas sem os dois `--build-arg` (`BUILD_SHA`, `BUILD_TIME`) do [passo 3](#3-construir-e-carregar-as-imagens) — o endpoint funciona normalmente, só reporta `"unknown"` para o que foi omitido em vez de falhar; veja [`DEPLOY_VERIFICATION.pt-BR.md`](../technical-assessment/DEPLOY_VERIFICATION.pt-BR.md) |
 | O botão do Google nunca aparece | Esperado quando não há `Google:ClientId` configurado — `GET /api/users/config` reporta `googleSignInEnabled: false` e o frontend o esconde deliberadamente, em vez de mostrar um botão fadado a falhar |
 | Nenhum e-mail chega apesar de `EMAIL_PROVIDER=resend` | Verifique os logs do `notifications-api` e o Secret `resend-credentials` — uma `RESEND_API_KEY` ausente/inválida faz o envio falhar, e isso fica registrado na própria linha de `Notification` (visível via o endpoint admin de notificações), não é silenciosamente engolido |
 | Preços do catálogo aparecem em BRL mesmo com a alternância em inglês | `GET /api/quotations/usd-brl` retornou `409` — tanto o Frankfurter quanto o ExchangeRate-API estão inacessíveis (geralmente um cluster sem acesso de saída à internet); o frontend degrada para o BRL nativo por design, em vez de mostrar um preço quebrado — veja os logs do `catalog-api` para saber qual provedor falhou e por quê |

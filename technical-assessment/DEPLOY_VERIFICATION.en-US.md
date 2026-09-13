@@ -76,7 +76,7 @@ Don't use this comparison for anything. It was tried, it looked reasonable, and 
 #11 CACHED
 ```
 
-**2. The `/version` endpoint.** All five backend services (`users-api`, `catalog-api`, `orders-api`, `payments-api`, `notifications-api`) expose `GET /version`, returning the exact commit and build time baked into that specific image:
+**2. The `/version` endpoint.** All six backend services (`users-api`, `catalog-api`, `orders-api`, `payments-api`, `notifications-api`, `platform-api`) expose `GET /version`, returning the exact commit and build time baked into that specific image:
 
 ```json
 {"sha": "5eb124839f1e4962b2e911e64a1241daad5df858", "buildTime": "2026-09-13T00:23:41Z"}
@@ -97,7 +97,7 @@ Without both `--build-arg`s, the endpoint still works — it just reports `"unkn
 
 ## Reaching `/health` and `/version` at all: why `kubectl port-forward`
 
-Neither endpoint is reachable from the browser via `http://localhost/...`, and that's by design, not an oversight: the Ingress (`orchestration/templates/ingress.yaml`) only routes specific path prefixes to each backend — `/api/users`, `/api/games`, `/api/quotations`, `/api/orders`, `/api/library`, `/api/payments`, `/api/notifications`, and `/` (the frontend). `/health` and `/version` sit at each service's own root, outside every one of those prefixes, so a request to e.g. `/api/catalog/health` doesn't reach `catalog-api` at all — it falls through to the `/` rule and lands on the frontend's own router instead, which then redirects somewhere sensible for a route it doesn't recognize.
+Neither endpoint is reachable from the browser via `http://localhost/...`, and that's by design, not an oversight: the Ingress (`orchestration/templates/ingress.yaml`) only routes specific path prefixes to each backend — `/api/users`, `/api/catalog`, `/api/quotations`, `/api/orders`, `/api/library`, `/api/payments`, `/api/notifications`, `/api/platform`, and `/` (the frontend). `/health` and `/version` sit at each service's own root, outside every one of those prefixes, so a request to e.g. `/api/catalog/health` doesn't reach `catalog-api` at all — it falls through to the `/` rule and lands on the frontend's own router instead, which then redirects somewhere sensible for a route it doesn't recognize.
 
 Kubernetes' own liveness/readiness probes reach `/health` directly (pod IP, no Ingress involved), so this was never a problem for them — it only becomes one the moment a person wants to check `/health` or `/version` by hand. `kubectl port-forward` opens a direct tunnel from a local port straight to the pod, bypassing the Ingress entirely.
 
@@ -111,6 +111,7 @@ kubectl get svc -n fiap-games
 # orders-api          ClusterIP   10.96.x.x       8080/TCP
 # payments-api        ClusterIP   10.96.x.x       8080/TCP
 # notifications-api   ClusterIP   10.96.x.x       8080/TCP
+# platform-api        ClusterIP   10.96.x.x       8080/TCP
 # ...
 ```
 
