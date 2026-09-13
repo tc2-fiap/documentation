@@ -131,6 +131,26 @@ BASE=http://localhost
 
 ### Cadastrar e fazer login
 
+`POST /api/users/register` — e a página `/register` do frontend por trás dele — sempre cria uma conta com a role `Player`; não existe um jeito de se auto-cadastrar como `Admin`. A única forma de conseguir uma conta Admin é já ter uma e promover outra pessoa via `PUT /api/users/{id}/role` (admin-only) — por isso o `users-api` já semeia uma conta Admin (e, por conveniência, uma Player) na primeira subida:
+
+| Conta | Email | Senha | Role |
+|---|---|---|---|
+| Admin | `admin@fiapgames.local` | `admin-dev-password-change-me` | `Admin` |
+| Player | `player@fiapgames.local` | `player-dev-password-change-me` | `Player` |
+
+(Configuradas nas chaves `admin`/`player` de `orchestration/values.yaml` — troque-as antes de qualquer implantação real.)
+
+O caminho mais rápido é pular o cadastro e logar direto com a conta Player já semeada:
+
+```bash
+TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
+  "email": "player@fiapgames.local",
+  "password": "player-dev-password-change-me"
+}' | jq -r '.accessToken')
+```
+
+Ou, para ver o próprio fluxo de cadastro (o e-mail de boas-vindas, `UserCreatedEvent` indo e voltando pelo RabbitMQ), registre uma conta nova e faça login com ela:
+
 ```bash
 curl -s -X POST $BASE/api/users/register -H "Content-Type: application/json" -d '{
   "name": "Ada Lovelace",
@@ -144,11 +164,13 @@ TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json
 }' | jq -r '.accessToken')
 ```
 
-Acompanhe `kubectl logs -n fiap-games deploy/notifications-api -f` em outro terminal — o cadastro deve produzir uma linha de log de e-mail de boas-vindas em um ou dois segundos (`UserCreatedEvent` indo e voltando pelo RabbitMQ).
+Acompanhe `kubectl logs -n fiap-games deploy/notifications-api -f` em outro terminal ao registrar — deve aparecer uma linha de log de e-mail de boas-vindas em um ou dois segundos (isso não acontece ao logar direto com a conta Player semeada, já que nenhum `UserCreatedEvent` novo é publicado nesse caso).
+
+Daqui em diante, `$TOKEN` pode ser tanto o da conta Player semeada quanto o da conta recém-registrada — qualquer uma serve para o resto deste passo a passo.
 
 ### Navegar no catálogo e comprar um jogo
 
-O `catalog-api` se auto-semeia com 8 jogos reais (capas reais do Steam, preços realistas em BRL) na primeira vez que inicia contra um banco vazio, então já existe algo para navegar sem criar nada manualmente. No navegador isso passa por um carrinho e uma etapa de confirmação de checkout (veja [O mesmo fluxo em um navegador](#o-mesmo-fluxo-em-um-navegador) mais abaixo); direto na API, uma única chamada cria o pedido:
+O `catalog-api` se auto-semeia com 30 jogos (a maioria reais, com capas reais do Steam e preços realistas em BRL) na primeira vez que inicia contra um banco vazio, então já existe algo para navegar sem criar nada manualmente — inclusive um jogo fictício, "Corrupted Save: QA Edition", propositalmente precificado em `49.13` para sempre falhar no pagamento (veja a seção abaixo). No navegador isso passa por um carrinho e uma etapa de confirmação de checkout (veja [O mesmo fluxo em um navegador](#o-mesmo-fluxo-em-um-navegador) mais abaixo); direto na API, uma única chamada cria o pedido:
 
 ```bash
 curl -s $BASE/api/catalog -H "Authorization: Bearer $TOKEN" | jq
@@ -173,7 +195,7 @@ O gateway de pagamento simulado decide de forma determinística pelo preço, nun
 curl -s $BASE/api/library -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-Para ver uma compra rejeitada, compre um jogo com preço acima de `999.00`, ou cujo preço termine em `.13` — o pedido se resolve como `Failed` e nunca aparece na biblioteca.
+Para ver uma compra rejeitada, compre um jogo com preço acima de `999.00`, ou cujo preço termine em `.13` — o pedido se resolve como `Failed` e nunca aparece na biblioteca. O seed já inclui um jogo pronto exatamente para isso: `"Corrupted Save: QA Edition"`, precificado em `49.13`.
 
 ### Cotação em USD e o seu próprio checkout
 
@@ -191,7 +213,7 @@ Diferente da rota admin-only `/api/payments/{orderId}` abaixo, esta rota é para
 
 ### Login de admin e a trilha de auditoria entre serviços
 
-A conta de admin semeada (`admin.email`/`admin.password` do `values.yaml` — `admin@fiapgames.local` / `admin-dev-password-change-me` por padrão) pode ver os pedidos de todos os usuários e o ciclo de vida completo de qualquer um deles:
+A conta Admin semeada (a mesma da tabela na seção "Cadastrar e fazer login" acima) pode ver os pedidos de todos os usuários e o ciclo de vida completo de qualquer um deles:
 
 ```bash
 ADMIN_TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
@@ -210,8 +232,6 @@ Um admin também pode listar todo Pod do cluster — o único endpoint apoiado e
 ```bash
 curl -s $BASE/api/platform/admin/pods -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 ```
-
-Uma conta não-admin também já vem semeada para o fluxo comum de compra, sem precisar de cadastro (`player.email`/`player.password` do `values.yaml` — `player@fiapgames.local` / `player-dev-password-change-me` por padrão).
 
 As respostas de pagamentos e notificações incluem os payloads reais de request/response trocados com o gateway e o provedor de e-mail — JSON real, não um resumo, mesmo para o gateway simulado (entrada de trilha de auditoria do `notes.md`). Confirme que a fronteira se mantém — as mesmas quatro chamadas com `$TOKEN` (um usuário não-admin) em vez de `$ADMIN_TOKEN` devem retornar `403`.
 
@@ -232,7 +252,7 @@ Cada um é paginado (`page`/`pageSize`, limitado a 100) e aceita filtros opciona
 open http://localhost   # ou apenas navegue até lá
 ```
 
-Cadastre-se ou faça login (um botão de login com Google aparece automaticamente só se `Google:ClientId` estiver configurado — ver `notes.md` 28). Adicione um ou mais jogos ao carrinho a partir do catálogo e revise em `/cart`, ou use `Comprar agora` em um único jogo — dos dois jeitos você chega na mesma página de confirmação `/checkout` antes de qualquer pedido ser de fato criado: uma revisão item a item (capa, título, gênero/plataforma de cada jogo) e o total em BRL e em USD. Ao confirmar, você chega na página do pedido: os mesmos itens, uma caixa de status do pedido e do pagamento, o total, e — se um gateway PIX real estiver configurado — um QR code para escanear. A transição `Pending` → `Paid`/`Failed` aparece no instante em que acontece, entregue por uma conexão Server-Sent Events em vez de consultada por polling — diferente do laço `watch` com `$ORDER_ID` acima, que é só uma forma conveniente de observar essa mesma transição pela linha de comando (`notes.md` 53). Ao entrar como o admin semeado, aparecem quatro links de navegação: a visão de todos os pedidos (e sua página de detalhe por pedido, que compõe os mesmos quatro endpoints restritos a um pedido acima em uma única tela), "Eventos do Sistema" — a página `/admin/events` das chamadas curl acima, com filtros em dropdown por origem, tipo e categoria, mais um intervalo de datas, e um payload JSON bruto expansível em cada linha ao clicar — "Gerenciar Jogos" (`/admin/games`), uma tabela filtrável do catálogo com Editar e Excluir em cada linha, mais um botão "Criar jogo" — e "Saúde do Sistema" (`/admin/system`), que chama o endpoint `/version` de cada serviço (`sha`/`buildTime`, alcançável ou não) e o `GET /api/platform/admin/pods` do `platform-api` para uma tabela de pods ao vivo, os mesmos dados das duas chamadas curl acima em duas telas.
+Cadastre-se ou faça login com uma das contas semeadas (a Admin, pra ver as telas de admin direto; a Player, pra pular o cadastro) — um botão de login com Google aparece automaticamente só se `Google:ClientId` estiver configurado — ver `notes.md` 28. Adicione um ou mais jogos ao carrinho a partir do catálogo e revise em `/cart`, ou use `Comprar agora` em um único jogo — dos dois jeitos você chega na mesma página de confirmação `/checkout` antes de qualquer pedido ser de fato criado: uma revisão item a item (capa, título, gênero/plataforma de cada jogo) e o total em BRL e em USD. Ao confirmar, você chega na página do pedido: os mesmos itens, uma caixa de status do pedido e do pagamento, o total, e — se um gateway PIX real estiver configurado — um QR code para escanear. A transição `Pending` → `Paid`/`Failed` aparece no instante em que acontece, entregue por uma conexão Server-Sent Events em vez de consultada por polling — diferente do laço `watch` com `$ORDER_ID` acima, que é só uma forma conveniente de observar essa mesma transição pela linha de comando (`notes.md` 53). Ao entrar como o admin semeado, aparecem quatro links de navegação: a visão de todos os pedidos (e sua página de detalhe por pedido, que compõe os mesmos quatro endpoints restritos a um pedido acima em uma única tela), "Eventos do Sistema" — a página `/admin/events` das chamadas curl acima, com filtros em dropdown por origem, tipo e categoria, mais um intervalo de datas, e um payload JSON bruto expansível em cada linha ao clicar — "Gerenciar Jogos" (`/admin/games`), uma tabela filtrável do catálogo com Editar e Excluir em cada linha, mais um botão "Criar jogo" — e "Saúde do Sistema" (`/admin/system`), que chama o endpoint `/version` de cada serviço (`sha`/`buildTime`, alcançável ou não) e o `GET /api/platform/admin/pods` do `platform-api` para uma tabela de pods ao vivo, os mesmos dados das duas chamadas curl acima em duas telas.
 
 O cabeçalho tem uma alternância EN/PT, visível mesmo antes de fazer login. Trocar para português sempre mostra o BRL nativo (ex.: `R$ 29,99`); trocar para inglês converte todo preço do catálogo para o equivalente em USD usando a cotação ao vivo, voltando para BRL se a cotação estiver indisponível — nunca um preço em branco ou quebrado. O carrinho, o checkout e a página do pedido sempre mostram as duas moedas juntas, independente da alternância. A escolha de idioma em si persiste entre recarregamentos (`notes.md` 35, 36, 39).
 

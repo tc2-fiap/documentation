@@ -131,6 +131,26 @@ BASE=http://localhost
 
 ### Register and log in
 
+`POST /api/users/register` — and the frontend's `/register` page behind it — always creates a `Player` account; there is no way to self-register as `Admin`. The only way to get an Admin account is to already have one and promote someone else via `PUT /api/users/{id}/role` (admin-only) — which is why `users-api` already seeds one Admin (and, for convenience, one Player) account on first startup:
+
+| Account | Email | Password | Role |
+|---|---|---|---|
+| Admin | `admin@fiapgames.local` | `admin-dev-password-change-me` | `Admin` |
+| Player | `player@fiapgames.local` | `player-dev-password-change-me` | `Player` |
+
+(Configured via `orchestration/values.yaml`'s `admin`/`player` keys — change them before any real deployment.)
+
+The fastest path is to skip registration entirely and log in directly with the seeded Player account:
+
+```bash
+TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
+  "email": "player@fiapgames.local",
+  "password": "player-dev-password-change-me"
+}' | jq -r '.accessToken')
+```
+
+Or, to see the registration flow itself (the welcome email, `UserCreatedEvent` round-tripping through RabbitMQ), register a fresh account and log in with it instead:
+
 ```bash
 curl -s -X POST $BASE/api/users/register -H "Content-Type: application/json" -d '{
   "name": "Ada Lovelace",
@@ -144,11 +164,13 @@ TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json
 }' | jq -r '.accessToken')
 ```
 
-Watch `kubectl logs -n fiap-games deploy/notifications-api -f` in another terminal — registering should produce a welcome-email log line within a second or two (`UserCreatedEvent` round-tripping through RabbitMQ).
+Watch `kubectl logs -n fiap-games deploy/notifications-api -f` in another terminal while registering — a welcome-email log line should appear within a second or two (this doesn't happen when logging straight into the seeded Player account, since no new `UserCreatedEvent` is published that way).
+
+From here on, `$TOKEN` can be either the seeded Player's or the freshly-registered account's — either works for the rest of this walkthrough.
 
 ### Browse the catalog and buy a game
 
-`catalog-api` seeds itself with 8 real games (real Steam cover art, realistic BRL prices) the first time it starts against an empty database, so there's already something to browse without creating anything by hand. In the browser this goes through a cart and a checkout confirmation step (see [The same flow in a browser](#the-same-flow-in-a-browser) below); against the API directly, one call places the order:
+`catalog-api` seeds itself with 30 games (mostly real ones, with real Steam cover art and realistic BRL prices) the first time it starts against an empty database, so there's already something to browse without creating anything by hand — including one fictional one, "Corrupted Save: QA Edition," deliberately priced to always fail at payment (see below). In the browser this goes through a cart and a checkout confirmation step (see [The same flow in a browser](#the-same-flow-in-a-browser) below); against the API directly, one call places the order:
 
 ```bash
 curl -s $BASE/api/catalog -H "Authorization: Bearer $TOKEN" | jq
@@ -173,7 +195,7 @@ The simulated payment gateway decides deterministically by price, not randomly (
 curl -s $BASE/api/library -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-To see a rejected purchase instead, buy a game priced above `999.00`, or one whose price ends in `.13` — the order settles to `Failed` and never appears in the library.
+To see a rejected purchase instead, buy a game priced above `999.00`, or one whose price ends in `.13` — the order settles to `Failed` and never appears in the library. The seed already includes a game built exactly for this: `"Corrupted Save: QA Edition"`, priced at `49.13`.
 
 ### USD quotation and your own checkout
 
@@ -191,7 +213,7 @@ Unlike the admin-only `/api/payments/{orderId}` below, this route is for the ord
 
 ### Admin login and the cross-service audit trail
 
-The seeded admin account (`values.yaml`'s `admin.email`/`admin.password` — `admin@fiapgames.local` / `admin-dev-password-change-me` by default) can see every user's orders and the full lifecycle of any one of them:
+The seeded Admin account (the same one from the table in "Register and log in" above) can see every user's orders and the full lifecycle of any one of them:
 
 ```bash
 ADMIN_TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
@@ -210,8 +232,6 @@ An admin can also list every Pod in the cluster — the one endpoint backed by K
 ```bash
 curl -s $BASE/api/platform/admin/pods -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 ```
-
-A seeded non-admin account is also ready for the ordinary purchase flow, no registration needed (`values.yaml`'s `player.email`/`player.password` — `player@fiapgames.local` / `player-dev-password-change-me` by default).
 
 The payments and notifications responses include the actual request/response payloads exchanged with the gateway and email provider — real JSON, not a summary, even for the simulated gateway (`notes.md`'s audit-trail entry). Confirm the boundary holds — the same four calls with `$TOKEN` (a non-admin) instead of `$ADMIN_TOKEN` should all return `403`.
 
@@ -232,7 +252,7 @@ Each is paginated (`page`/`pageSize`, capped at 100) and accepts optional filter
 open http://localhost   # or just navigate there
 ```
 
-Register or log in (a Google sign-in button appears automatically only if `Google:ClientId` is configured — see `notes.md` 28). Add one or more games to your cart from the catalog and review them on `/cart`, or use `Buy Now` on a single game — either way you land on the same `/checkout` confirmation page before anything is actually ordered: an itemized review (cover image, title, genre/platform per game) and the total in both BRL and USD. Confirming lands on the order page: the same line items, an order-and-payment-status box, the total, and — if a real PIX gateway is configured — a QR code to scan. The `Pending` → `Paid`/`Failed` transition appears the moment it happens, pushed over a Server-Sent Events connection rather than polled — unlike the `watch`-based `$ORDER_ID` loop above, which is just a convenient way to observe the same transition from the command line (`notes.md` 53). Logging in as the seeded admin surfaces four nav links: the all-orders view (and its per-order detail page, composing the same four order-scoped endpoints above into one screen), "System Events" — the `/admin/events` page from the curl calls above, with dropdown filters for source, kind, and type plus a date range, and a click-to-expand raw JSON payload on every row — "Manage Games" (`/admin/games`), a filterable table of the catalog with Edit and Delete on every row, plus a "Create game" button — and "System Health" (`/admin/system`), which calls every service's `/version` endpoint (`sha`/`buildTime`, reachable or not) and `platform-api`'s `GET /api/platform/admin/pods` for a live pod table, the same data as the two curl calls above rendered as two screens.
+Register or log in with one of the seeded accounts (Admin, to see the admin screens right away; Player, to skip registration) — a Google sign-in button appears automatically only if `Google:ClientId` is configured — see `notes.md` 28. Add one or more games to your cart from the catalog and review them on `/cart`, or use `Buy Now` on a single game — either way you land on the same `/checkout` confirmation page before anything is actually ordered: an itemized review (cover image, title, genre/platform per game) and the total in both BRL and USD. Confirming lands on the order page: the same line items, an order-and-payment-status box, the total, and — if a real PIX gateway is configured — a QR code to scan. The `Pending` → `Paid`/`Failed` transition appears the moment it happens, pushed over a Server-Sent Events connection rather than polled — unlike the `watch`-based `$ORDER_ID` loop above, which is just a convenient way to observe the same transition from the command line (`notes.md` 53). Logging in as the seeded admin surfaces four nav links: the all-orders view (and its per-order detail page, composing the same four order-scoped endpoints above into one screen), "System Events" — the `/admin/events` page from the curl calls above, with dropdown filters for source, kind, and type plus a date range, and a click-to-expand raw JSON payload on every row — "Manage Games" (`/admin/games`), a filterable table of the catalog with Edit and Delete on every row, plus a "Create game" button — and "System Health" (`/admin/system`), which calls every service's `/version` endpoint (`sha`/`buildTime`, reachable or not) and `platform-api`'s `GET /api/platform/admin/pods` for a live pod table, the same data as the two curl calls above rendered as two screens.
 
 The header carries an EN/PT toggle, visible even before logging in. Toggling to Portuguese always shows native BRL (e.g. `R$ 29,99`); toggling to English converts every catalog price to its USD equivalent using the live quotation, falling back to BRL if the rate lookup is ever unavailable — never a blank or broken price. The cart, checkout, and order pages always show both currencies together regardless of the toggle. The language choice itself persists across a reload (`notes.md` 35, 36, 39).
 
