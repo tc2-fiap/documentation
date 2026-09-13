@@ -158,17 +158,19 @@ The rest of this section repeats the same flow directly against the API (`curl`)
 
 | Account | Email | Password | Role |
 |---|---|---|---|
-| Admin | `admin@fiapgames.local` | `admin-dev-password-change-me` | `Admin` |
-| Player | `player@fiapgames.local` | `player-dev-password-change-me` | `Player` |
+| Admin | `admin@fiapgames.local` | `Admin-Dev-2026!` | `Admin` |
+| Player | `player@fiapgames.local` | `Player-Dev-2026!` | `Player` |
 
 (Configured via `orchestration/values.yaml`'s `admin`/`player` keys — change them before any real deployment.)
+
+Any password used in `POST /api/users/register` must be at least 12 characters long and contain an uppercase letter, a lowercase letter, a digit, and a special character; a short list of common weak passwords (`password123`, `qwerty123`, etc.) is rejected outright even if it happens to satisfy those rules (`notes.md` 83). Login has no such check — it accepts whatever hash is already on file, including any pre-existing account created under the old, shorter rule.
 
 The fastest path is to skip registration entirely and log in directly with the seeded Player account:
 
 ```bash
 TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
   "email": "player@fiapgames.local",
-  "password": "player-dev-password-change-me"
+  "password": "Player-Dev-2026!"
 }' | jq -r '.accessToken')
 ```
 
@@ -178,12 +180,12 @@ Or, to see the registration flow itself (the welcome email, `UserCreatedEvent` r
 curl -s -X POST $BASE/api/users/register -H "Content-Type: application/json" -d '{
   "name": "Ada Lovelace",
   "email": "ada@example.com",
-  "password": "correct-horse-battery-staple"
+  "password": "CorrectHorse2026!Battery"
 }' | jq
 
 TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
   "email": "ada@example.com",
-  "password": "correct-horse-battery-staple"
+  "password": "CorrectHorse2026!Battery"
 }' | jq -r '.accessToken')
 ```
 
@@ -241,7 +243,7 @@ The seeded Admin account (the same one from the table in "Register and log in" a
 ```bash
 ADMIN_TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
   "email": "admin@fiapgames.local",
-  "password": "admin-dev-password-change-me"
+  "password": "Admin-Dev-2026!"
 }' | jq -r '.accessToken')
 
 curl -s $BASE/api/orders/admin -H "Authorization: Bearer $ADMIN_TOKEN" | jq

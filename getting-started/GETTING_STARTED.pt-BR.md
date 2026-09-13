@@ -158,17 +158,19 @@ O restante desta seção repete o mesmo fluxo direto pela API (`curl`), chamada 
 
 | Conta | Email | Senha | Role |
 |---|---|---|---|
-| Admin | `admin@fiapgames.local` | `admin-dev-password-change-me` | `Admin` |
-| Player | `player@fiapgames.local` | `player-dev-password-change-me` | `Player` |
+| Admin | `admin@fiapgames.local` | `Admin-Dev-2026!` | `Admin` |
+| Player | `player@fiapgames.local` | `Player-Dev-2026!` | `Player` |
 
 (Configuradas nas chaves `admin`/`player` de `orchestration/values.yaml` — troque-as antes de qualquer implantação real.)
+
+Qualquer senha usada em `POST /api/users/register` precisa ter pelo menos 12 caracteres e conter uma letra maiúscula, uma minúscula, um dígito e um caractere especial; uma pequena lista de senhas fracas comuns (`password123`, `qwerty123` etc.) é recusada mesmo que satisfaça essas regras (`notes.md` 83). O login não tem essa checagem — ele aceita o hash que já está gravado, incluindo qualquer conta pré-existente criada sob a regra antiga, mais curta.
 
 O caminho mais rápido é pular o cadastro e logar direto com a conta Player já semeada:
 
 ```bash
 TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
   "email": "player@fiapgames.local",
-  "password": "player-dev-password-change-me"
+  "password": "Player-Dev-2026!"
 }' | jq -r '.accessToken')
 ```
 
@@ -178,12 +180,12 @@ Ou, para ver o próprio fluxo de cadastro (o e-mail de boas-vindas, `UserCreated
 curl -s -X POST $BASE/api/users/register -H "Content-Type: application/json" -d '{
   "name": "Ada Lovelace",
   "email": "ada@example.com",
-  "password": "correct-horse-battery-staple"
+  "password": "CorrectHorse2026!Battery"
 }' | jq
 
 TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
   "email": "ada@example.com",
-  "password": "correct-horse-battery-staple"
+  "password": "CorrectHorse2026!Battery"
 }' | jq -r '.accessToken')
 ```
 
@@ -241,7 +243,7 @@ A conta Admin semeada (a mesma da tabela na seção "Cadastrar e fazer login" ac
 ```bash
 ADMIN_TOKEN=$(curl -s -X POST $BASE/api/users/login -H "Content-Type: application/json" -d '{
   "email": "admin@fiapgames.local",
-  "password": "admin-dev-password-change-me"
+  "password": "Admin-Dev-2026!"
 }' | jq -r '.accessToken')
 
 curl -s $BASE/api/orders/admin -H "Authorization: Bearer $ADMIN_TOKEN" | jq
