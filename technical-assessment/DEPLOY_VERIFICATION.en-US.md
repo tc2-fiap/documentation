@@ -99,7 +99,22 @@ Without both `--build-arg`s, the endpoint still works — it just reports `"unkn
 
 Neither endpoint is reachable from the browser via `http://localhost/...`, and that's by design, not an oversight: the Ingress (`orchestration/templates/ingress.yaml`) only routes specific path prefixes to each backend — `/api/users`, `/api/games`, `/api/quotations`, `/api/orders`, `/api/library`, `/api/payments`, `/api/notifications`, and `/` (the frontend). `/health` and `/version` sit at each service's own root, outside every one of those prefixes, so a request to e.g. `/api/catalog/health` doesn't reach `catalog-api` at all — it falls through to the `/` rule and lands on the frontend's own router instead, which then redirects somewhere sensible for a route it doesn't recognize.
 
-Kubernetes' own liveness/readiness probes reach `/health` directly (pod IP, no Ingress involved), so this was never a problem for them — it only becomes one the moment a person wants to check `/health` or `/version` by hand. `kubectl port-forward` opens a direct tunnel from a local port straight to the pod, bypassing the Ingress entirely:
+Kubernetes' own liveness/readiness probes reach `/health` directly (pod IP, no Ingress involved), so this was never a problem for them — it only becomes one the moment a person wants to check `/health` or `/version` by hand. `kubectl port-forward` opens a direct tunnel from a local port straight to the pod, bypassing the Ingress entirely.
+
+First, list the actual Service names — `svc/<name>` below has to be one of these, not a guess:
+
+```bash
+kubectl get svc -n fiap-games
+# NAME                TYPE        CLUSTER-IP      PORT(S)
+# catalog-api         ClusterIP   10.96.x.x       8080/TCP
+# users-api           ClusterIP   10.96.x.x       8080/TCP
+# orders-api          ClusterIP   10.96.x.x       8080/TCP
+# payments-api        ClusterIP   10.96.x.x       8080/TCP
+# notifications-api   ClusterIP   10.96.x.x       8080/TCP
+# ...
+```
+
+Then forward a local port to that Service's port:
 
 ```bash
 kubectl port-forward -n fiap-games svc/catalog-api 18080:8080 &
@@ -107,6 +122,6 @@ curl -s http://localhost:18080/version; echo
 curl -s http://localhost:18080/health; echo
 ```
 
-The `18080` is arbitrary (any free local port works) — but the target port must be the Service's actual port, `8080`, not `80`; every backend Service in this chart listens on `8080`, matching each container's own `ASPNETCORE_URLS=http://+:8080`.
+In `18080:8080`, only the second number is fixed — that has to be the Service's actual port (`8080` for every backend here, matching each container's own `ASPNETCORE_URLS=http://+:8080`, confirmed by the `PORT(S)` column above). The first number, `18080`, is completely arbitrary: it's just which port on *your own machine* the tunnel listens on, picked here only to avoid clashing with anything already using `8080` locally. Any free local port works — `19999:8080`, `8888:8080`, whatever's free.
 
 Kill the port-forward once done (`kill %1`, or `pkill -f "port-forward.*<service>"`) — it doesn't exit on its own.
