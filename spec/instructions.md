@@ -73,7 +73,8 @@ Registration, authentication, and authorization. Owns the `User` aggregate. Issu
 
 Also supports:
 - **Google sign-in** (`POST /api/users/login/google`) — verifies a client-obtained Google ID token server-side and issues the same JWT any other login path issues. Auto-links to an existing password account by email. See [`notes.md`](notes.md) 28.
-- **Roles.** `User.Role` is `Player` or `Admin`. One admin and one player are seeded at startup from Secret-provided config; every other admin is promoted by an existing one (`PUT /api/users/{id}/role`, admin-only). See [`notes.md`](notes.md) 26, 63.
+- **Roles.** `User.Role` is `Player` or `Admin`. One admin and one player are seeded at startup from Secret-provided config; every other admin is promoted by an existing one (`PUT /api/users/{id}/role`, admin-only). An admin cannot change or delete their own account (`id == callerId` is rejected outright) — self-registration only ever creates a `Player`, so removing the only path to promotion could strand the system with zero admins. See [`notes.md`](notes.md) 26, 63, 84.
+- **Login lockout.** `POST /api/users/login` locks an account for 15 minutes after 5 consecutive failed attempts, tracked per-account (not per-IP) on `User` itself. See `notes.md` 84.
 - **Admin visibility.** An admin can see every user's orders and, per order, the full cross-service trail — see [§4.3](#43-ordersapi), [§4.4](#44-paymentsapi), and [§4.5](#45-notificationsapi).
 
 ### 4.2 CatalogAPI
@@ -115,7 +116,7 @@ The sixth backend service, added after the original five ([`notes.md`](notes.md)
 PlatformAPI is deliberately the odd one out among the six:
 
 - **No database, no schema, no role.** It is the one backend service absent from the schema list in [§10](#10-non-functional-requirements) — there is nothing here for Postgres to isolate.
-- **No events published or consumed.** Like CatalogAPI, it sits outside [§8](#8-event-driven-communication) entirely, for an unrelated reason: it has no domain aggregate to raise events about.
+- **No purchase-flow events published or consumed.** Like CatalogAPI, it sits outside both flows in [§8](#8-event-driven-communication) entirely, for an unrelated reason: it has no domain aggregate to raise events about. It does consume `TokenRevokedEvent` — the one cross-cutting auth-infrastructure exception §8 describes, unrelated to purchases (`notes.md` 84).
 - **The only service with Kubernetes RBAC.** A dedicated `ServiceAccount` bound to a namespaced `Role` (`get`/`list`/`watch` on `pods` only — never a `ClusterRole`, and never write access) is the sole cluster-API credential anywhere in the system. Every other service's Kubernetes footprint is "a Deployment that runs a container"; this is the one place a service is *aware* it runs on Kubernetes at all.
 
 Every other service also gains a `GET /version` (or, for two admin-gated services, `GET /api/<prefix>/version`) endpoint returning `{ sha, buildTime }`, baked in at image build time via `--build-arg`. The dashboard's Services table calls each service's version endpoint (`Promise.allSettled`, so one unreachable service doesn't blank the page) alongside PlatformAPI's Pods table — two independent data sources on the same page, not one endpoint doing both jobs.
@@ -219,7 +220,17 @@ OrdersAPI ──OrderPlacedEvent──▶ PaymentsAPI ──PaymentProcessedEven
                                  └──▶ NotificationsAPI   (confirmation | failure notice)
 ```
 
-CatalogAPI appears in neither. It publishes and consumes nothing.
+CatalogAPI appears in neither. It publishes and consumes no *purchase-flow* event — see the auth-infrastructure exception below, which is the one thing it (and PlatformAPI) does consume.
+
+**Cross-cutting auth infrastructure (not a flow)**
+
+```
+UsersAPI ──TokenRevokedEvent──▶ every one of the six services (including UsersAPI itself)
+```
+
+`POST /api/users/logout` publishes this off the caller's own JWT claims; every service holds an in-memory, per-pod revocation store checked during token validation, so a revoked token stops authenticating everywhere within one broker round-trip instead of waiting out its natural expiry. This is the one case where CatalogAPI/PlatformAPI consume a broker event despite sitting outside both flows above — it's orthogonal to purchases, not a purchase-flow event, so it doesn't reopen §4.6's or this section's CatalogAPI isolation. See `notes.md` 84.
+
+`PUT /api/users/{id}/role` (see §4.1, `notes.md` 26/63) similarly publishes a `RoleChangedEvent` — persisted to UsersAPI's own audit log (surfacing in `/admin/events`) rather than driving any other service's behavior, so unlike `TokenRevokedEvent` it has no cross-service consumer today.
 
 Contract rules:
 
@@ -228,6 +239,8 @@ Contract rules:
   - `UserCreatedEvent { UserId, Name, Email }`
   - `OrderPlacedEvent { OrderId, UserId, GameIds, TotalPrice }`
   - `PaymentProcessedEvent { OrderId, UserId, Status }`
+  - `RoleChangedEvent { UserId, OldRole, NewRole, ChangedByUserId }`
+  - `TokenRevokedEvent { Jti, ExpiresAtUtc }`
 - **`OrderId` is the correlation key** across the whole purchase flow. It's the idempotency key for both consumers and the join key for tracing a flow through the logs — which is why it belongs on both events.
 - Queue/exchange names and connection details are non-secret configuration → **ConfigMap**, never hardcoded.
 - Broker credentials are secret → **Secret**.
