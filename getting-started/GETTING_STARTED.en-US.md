@@ -269,7 +269,7 @@ curl -s "$BASE/api/payments/admin" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 curl -s "$BASE/api/notifications/admin" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 ```
 
-Each is paginated (`page`/`pageSize`, capped at 100) and accepts optional filters — a `from`/`to` UTC date range on all four, plus `eventType` (users/orders), `status` (payments), and `type`/`status` (notifications). `catalog-api` has no equivalent endpoint — it publishes and consumes nothing, so there's nothing to list. Same `403` boundary check applies here too.
+Each is paginated (`page`/`pageSize`, capped at 100) and accepts optional filters — a `from`/`to` UTC date range on all four, plus `eventType` (users/orders), `status` (payments), and `type`/`status` (notifications). `catalog-api` has no equivalent endpoint — it has none of these four "list everything" admin endpoints, so there's nothing to list (it does consume `TokenRevokedEvent`, unrelated to this — `notes.md` 84). Same `403` boundary check applies here too.
 
 ## 7. Tear down
 

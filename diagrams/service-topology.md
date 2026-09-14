@@ -20,6 +20,7 @@ flowchart LR
     RabbitMQ -.-> Orders
     RabbitMQ -.-> Notifications
     Users -.->|"UserCreatedEvent"| RabbitMQ
+    RabbitMQ -.->|"TokenRevokedEvent (logout, transversal)"| Users & Catalog & Orders & Payments & Notifications & Platform
     Platform -.->|"lista pods (RBAC)"| K8sAPI[("Kubernetes API")]
 
     Users --> Postgres[("PostgreSQL\n(1 instância, 1 schema+role por serviço)")]

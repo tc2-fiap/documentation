@@ -269,7 +269,7 @@ curl -s "$BASE/api/payments/admin" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 curl -s "$BASE/api/notifications/admin" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 ```
 
-Cada um é paginado (`page`/`pageSize`, limitado a 100) e aceita filtros opcionais — um intervalo de datas `from`/`to` (UTC) nos quatro, além de `eventType` (users/orders), `status` (payments) e `type`/`status` (notifications). O `catalog-api` não tem um endpoint equivalente — ele não publica nem consome nada, então não há o que listar. A mesma verificação de fronteira `403` também se aplica aqui.
+Cada um é paginado (`page`/`pageSize`, limitado a 100) e aceita filtros opcionais — um intervalo de datas `from`/`to` (UTC) nos quatro, além de `eventType` (users/orders), `status` (payments) e `type`/`status` (notifications). O `catalog-api` não tem um endpoint equivalente — ele não tem nenhum desses quatro endpoints "listar tudo", então não há o que listar (ele consome o `TokenRevokedEvent`, sem relação com isso — `notes.md` 84). A mesma verificação de fronteira `403` também se aplica aqui.
 
 ## 7. Encerrar o ambiente
 

@@ -33,6 +33,31 @@ Feature: User registration event flow
     And no UserCreatedEvent is published
 ```
 
+## Feature: Token revocation on logout
+
+```gherkin
+Feature: Cross-service JWT revocation
+  As an authenticated user
+  I want logging out to actually invalidate my token
+  So that it stops working immediately instead of staying valid until it naturally expires
+
+  Scenario: Logging out publishes a revocation event
+    Given I am authenticated with a valid access token
+    When I POST /api/users/logout
+    Then the response status is 204 No Content
+    And UsersAPI publishes a TokenRevokedEvent containing that token's Jti
+
+  Scenario: Every service rejects the revoked token afterward
+    Given a TokenRevokedEvent has been published for a token's Jti
+    When that same token is used to call any authenticated endpoint on any of the six services
+    Then the response status is 401 Unauthorized
+
+  Scenario: Revoking one user's token doesn't affect another user's session
+    Given user A's token has just been revoked
+    When user B calls an authenticated endpoint with their own, still-valid token
+    Then the response status is 200 OK
+```
+
 ## Feature: Placing an order
 
 ```gherkin
