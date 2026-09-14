@@ -9,7 +9,11 @@ Como levar o código novo de um serviço até o cluster já rodando, e — a par
 O cluster já está rodando — este é o ciclo para levar código novo até ele, não uma instalação do zero. Reconstrua a imagem daquele serviço, carregue-a no containerd do `kind` (mesma ideia do passo "Construir e carregar as imagens" do `GETTING_STARTED.md`, só que para uma imagem) e force o Deployment a de fato usá-la:
 
 ```bash
-docker build -t frontend:latest frontend   # ou o comando de build de qualquer outro serviço
+docker build -t frontend:latest frontend
+# o contexto de build de um serviço backend é a raiz do próprio repositório,
+# com -f apontando pro Dockerfile aninhado — por exemplo:
+docker build -t catalog-api:latest -f catalog-api/src/FiapGames.Catalog.Api/Dockerfile catalog-api
+
 kind load docker-image frontend:latest --name fiap-games
 kubectl rollout restart deployment/frontend -n fiap-games
 kubectl rollout status deployment/frontend -n fiap-games
@@ -33,22 +37,18 @@ kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=18
 cd repos   # ou onde quer que os sete repos de serviço estejam, lado a lado
 
 for svc in users-api catalog-api orders-api payments-api notifications-api platform-api; do
-  cd "$svc"
-  SHA=$(git rev-parse HEAD)
-  TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   case "$svc" in
-    users-api)         apidir="src/FiapGames.Users.Api" ;;
-    catalog-api)        apidir="src/FiapGames.Catalog.Api" ;;
-    orders-api)          apidir="src/FiapGames.Orders.Api" ;;
-    payments-api)        apidir="src/FiapGames.Payments.Api" ;;
-    notifications-api)   apidir="src/FiapGames.Notifications.Api" ;;
-    platform-api)        apidir="src/FiapGames.Platform.Api" ;;
+    users-api)         name="Users" ;;
+    catalog-api)        name="Catalog" ;;
+    orders-api)          name="Orders" ;;
+    payments-api)        name="Payments" ;;
+    notifications-api)   name="Notifications" ;;
+    platform-api)        name="Platform" ;;
   esac
-  docker build -t "$svc:latest" --build-arg BUILD_SHA="$SHA" --build-arg BUILD_TIME="$TIME" "$apidir"
-  cd ..
+  docker build -t "$svc:latest" -f "$svc/src/FiapGames.$name.Api/Dockerfile" "$svc"
 done
 
-cd frontend && docker build -t frontend:latest . && cd ..
+docker build -t frontend:latest frontend
 
 kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
   payments-api:latest notifications-api:latest platform-api:latest frontend:latest \
@@ -131,18 +131,13 @@ Não use essa comparação para nada. Foi testada, parecia razoável, e não fun
 {"sha": "5eb124839f1e4962b2e911e64a1241daad5df858", "buildTime": "2026-09-13T00:23:41Z"}
 ```
 
-Isso é preenchido em tempo de build via dois `ARG`s do Dockerfile no estágio `runtime` (`ARG BUILD_SHA=unknown`, `ARG BUILD_TIME=unknown`, ambos também definidos como `ENV` para a aplicação em execução conseguir lê-los) — veja por exemplo `catalog-api/src/FiapGames.Catalog.Api/Dockerfile` e a linha `app.MapGet("/version", ...)` no `Program.cs` daquele serviço, logo depois de `app.MapHealthChecks("/health")`. O contexto de build de cada serviço é só a pasta do próprio projeto, sem `.git` dentro dela, então nenhum dos dois valores pode ser embutido automaticamente — passe os dois explicitamente:
+Isso é calculado pelo próprio Dockerfile, não passado de fora. O contexto de build de cada backend é a **raiz do próprio repositório** (não só a subpasta do serviço, exatamente para que o `.git` esteja presente), e uma etapa `RUN` no estágio `build` roda `git rev-parse HEAD` + `date -u` e grava o resultado em `/build-info.json`, copiado para o estágio `runtime` junto com a aplicação publicada — veja por exemplo `catalog-api/src/FiapGames.Catalog.Api/Dockerfile`, `Shared/Infrastructure/BuildInfo.cs` (lê esse arquivo) e a linha `app.MapGet("/version", ...)` no `Program.cs` daquele serviço, logo depois de `app.MapHealthChecks("/health")`:
 
 ```bash
-SHA=$(git rev-parse HEAD)
-TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-docker build -t catalog-api:latest \
-  --build-arg BUILD_SHA="$SHA" \
-  --build-arg BUILD_TIME="$TIME" \
-  catalog-api/src/FiapGames.Catalog.Api
+docker build -t catalog-api:latest -f catalog-api/src/FiapGames.Catalog.Api/Dockerfile catalog-api
 ```
 
-Sem os dois `--build-arg`, o endpoint continua funcionando — só reporta `"unknown"` para o que foi omitido, em vez de falhar.
+Nenhum `--build-arg` pra passar — uma versão anterior desse mecanismo usava `ARG BUILD_SHA`/`ARG BUILD_TIME` passados de fora, e este projeto teve problema de verdade com isso na prática: fácil esquecer de passar, ou calcular contra um `HEAD` ainda não commitado bem antes de commitar (os dois já aconteceram). Calcular dentro da própria imagem significa que só pode refletir o que realmente foi copiado via `COPY` — o que, desde que você commite antes de buildar, é sempre o código que está de fato rodando. `BuildInfo.Read()` cai em `"unknown"` para qualquer um dos campos em vez de falhar se `/build-info.json` estiver ausente ou ilegível (ex.: um contexto de build sem `.git`, ou uma troca de imagem base que descartou o arquivo).
 
 ## Como alcançar `/health` e `/version` — e por que precisa de `kubectl port-forward`
 

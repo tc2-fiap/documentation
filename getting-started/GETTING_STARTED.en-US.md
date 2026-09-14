@@ -54,26 +54,22 @@ The `kubectl wait` typically takes around 30 seconds — the controller image ne
 
 ## 3. Build and load the images
 
-Each service ships its own `Dockerfile` — the six backend services have theirs at `<repo>/src/FiapGames.<Name>.Api/Dockerfile`, `frontend`'s is at its repo root — and the chart expects the resulting images already sitting in the cluster; nothing here pulls from a registry. Build each with the name its own `k8s/values.yaml` expects (`repository: <name>`, `tag: latest`), then load them straight into `kind`'s containerd:
-
-Each backend also has two Dockerfile `ARG`s (`BUILD_SHA`, `BUILD_TIME`) that feed each service's `GET /version` endpoint — without them the value silently falls back to `"unknown"` instead of failing, so it's easy to miss until you look at the admin "System Health" page. Pass both explicitly (see [`DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md) for why):
+Each service ships its own `Dockerfile` — the six backend services have theirs at `<repo>/src/FiapGames.<Name>.Api/Dockerfile`, `frontend`'s is at its repo root — and the chart expects the resulting images already sitting in the cluster; nothing here pulls from a registry. Build each with the name its own `k8s/values.yaml` expects (`repository: <name>`, `tag: latest`), then load them straight into `kind`'s containerd. The build context for every service is its **own repo root** (not the service subfolder), so pass `-f` to point at the nested Dockerfile:
 
 ```bash
-BUILDTIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-docker build --build-arg BUILD_SHA=$(git -C users-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t users-api:latest users-api/src/FiapGames.Users.Api
-docker build --build-arg BUILD_SHA=$(git -C catalog-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t catalog-api:latest catalog-api/src/FiapGames.Catalog.Api
-docker build --build-arg BUILD_SHA=$(git -C orders-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t orders-api:latest orders-api/src/FiapGames.Orders.Api
-docker build --build-arg BUILD_SHA=$(git -C payments-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t payments-api:latest payments-api/src/FiapGames.Payments.Api
-docker build --build-arg BUILD_SHA=$(git -C notifications-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t notifications-api:latest notifications-api/src/FiapGames.Notifications.Api
-docker build --build-arg BUILD_SHA=$(git -C platform-api rev-parse HEAD) --build-arg BUILD_TIME=$BUILDTIME -t platform-api:latest platform-api/src/FiapGames.Platform.Api
+docker build -t users-api:latest -f users-api/src/FiapGames.Users.Api/Dockerfile users-api
+docker build -t catalog-api:latest -f catalog-api/src/FiapGames.Catalog.Api/Dockerfile catalog-api
+docker build -t orders-api:latest -f orders-api/src/FiapGames.Orders.Api/Dockerfile orders-api
+docker build -t payments-api:latest -f payments-api/src/FiapGames.Payments.Api/Dockerfile payments-api
+docker build -t notifications-api:latest -f notifications-api/src/FiapGames.Notifications.Api/Dockerfile notifications-api
+docker build -t platform-api:latest -f platform-api/src/FiapGames.Platform.Api/Dockerfile platform-api
 docker build -t frontend:latest frontend
 
 kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
   payments-api:latest notifications-api:latest platform-api:latest frontend:latest --name fiap-games
 ```
 
-(`frontend` doesn't use this mechanism — its version comes from `package.json`, not a build `ARG`; `notes.md` 77.)
+Every `GET /version` endpoint (backends) and `AdminSystemHealthPage`'s frontend row report the exact commit each image was built from — each Dockerfile computes this itself (`git rev-parse HEAD`, `.git` is present since the build context is the repo root) and bakes it into the image, no `--build-arg` to remember or forget. See `notes.md` for why this replaced an earlier `--build-arg BUILD_SHA`/`BUILD_TIME` approach that was easy to get wrong (pass it, or compute it against a not-yet-committed `HEAD`) — this project hit both failure modes in practice.
 
 Verify every image was both built and actually loaded into the cluster's containerd before moving on — this is the check that would have caught the `ImagePullBackOff` failure mode in the Troubleshooting table below, before `helm install` ever ran:
 
@@ -297,7 +293,7 @@ Every backend repo and the frontend also run alone via their own `docker-compose
 | `curl $BASE/...` connection refused | The ingress controller isn't ready yet, or the kind cluster wasn't created with the port mappings in `kind/cluster-config.yaml` |
 | A pod is `ImagePullBackOff`/`ErrImagePull` for `<service>:latest` (`pull access denied, repository does not exist`) | The image was never built and loaded into the cluster — see [step 3](#3-build-and-load-the-images); a plain `docker build` alone doesn't reach `kind`'s containerd, only `kind load docker-image` does |
 | `docker build` prints `DEPRECATED: The legacy builder is deprecated and will be removed in a future release` | The build still completes — this is just a warning, not a failure — but install the `buildx` plugin (see Prerequisites) so it uses BuildKit instead |
-| The "System Health" page (`/admin/system`) shows `sha`/`buildTime` as `unknown` for some service | The images were built without the two `--build-arg`s (`BUILD_SHA`, `BUILD_TIME`) from [step 3](#3-build-and-load-the-images) — the endpoint still works, it just reports `"unknown"` for whichever one was omitted instead of failing; see [`DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md) |
+| The "System Health" page (`/admin/system`) shows `sha`/`buildTime` as `unknown` for some service | The image was built with a Docker context that didn't include `.git` (e.g. the old per-service-subfolder context) — each Dockerfile computes this itself via `git rev-parse HEAD` now, which silently falls back to `"unknown"` rather than failing if `.git` isn't reachable. Rebuild with the exact `-f`/context shape in [step 3](#3-build-and-load-the-images); see [`DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md) |
 | Google button never appears | Expected with no `Google:ClientId` configured — `GET /api/users/config` reports `googleSignInEnabled: false` and the frontend hides it deliberately, rather than showing a button guaranteed to fail |
 | No email arrives despite `EMAIL_PROVIDER=resend` | Check `notifications-api` logs and the `resend-credentials` Secret — a missing/invalid `RESEND_API_KEY` fails the send and is recorded on the `Notification` row itself (visible via the admin notifications endpoint), not silently swallowed |
 | Catalog prices show in BRL even with the toggle set to English | `GET /api/quotations/usd-brl` returned `409` — both Frankfurter and ExchangeRate-API are unreachable (usually a cluster with no outbound internet access); the frontend degrades to native BRL by design rather than showing a broken price, see `catalog-api` logs for which provider failed and why |
