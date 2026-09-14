@@ -1130,3 +1130,15 @@ JWTs here are stateless, validated independently by each service off a shared si
 **Context.** Requested directly: "full documentation review considering these last changes." Scoped via two upfront questions rather than assumed — whether to include the two bigger items (real coverage re-measurement, a new `bdd.md` scenario) alongside the straightforward stale-claim fixes, and whether to fix the one unrelated staleness noticed in passing. Both confirmed yes.
 
 **Revisit if:** the `TestResults`/`obj`/`bin` root-ownership issue across all six services' test projects is ever actually cleaned up (`sudo rm -rf` on each) — at that point coverage can be re-measured in place instead of via a scratch copy per service, same as entry 84's `platform-api` note already flagged for `dotnet test` generally.
+
+---
+
+## 87. `platform-api` was missing the admin-gated `/api/platform/version` — the System Health page couldn't show its own build info
+
+**Decision.** Entry 75 gave `platform-api` the same bare, unauthenticated `/version` every service has (port-forward only, per `DEPLOY_VERIFICATION.md`), but never gave it the second, Admin-gated `/api/<prefix>/version` twin the other five services all have — the one actually reachable through the Ingress, which is what the frontend's System Health page's Services table calls. `AdminSystemHealthPage.tsx`'s `SERVICES` array only ever listed the five DB-backed services; `platform-api`'s own build provenance was never shown there at all, only inferred indirectly from whether its pod appeared in the Pods table below (a comment on the page said as much: "five services' own /version, plus platform-api's pod list"). Fixed by mirroring the exact pattern every other service already uses: `PlatformEndpoints.MapPlatformEndpoints` now takes a `Func<IResult> getVersion` parameter and registers it at `/api/platform/version` (`RequireAuthorization(Admin)`), `Program.cs`'s local `GetVersion` function is passed in the same way `catalog-api`'s `Program.cs` already does. Frontend: `platformApi.adminVersion()` added, `platform-api` added to `AdminSystemHealthPage.tsx`'s `SERVICES` array and its `ServiceName` union type.
+
+**Context.** Raised directly by the user while reviewing this session's "check pending deployments" answer, which had described the missing endpoint as "existing, expected behavior" — the user pushed back that the System Health page should show `platform-api` too, correctly identifying it as a real gap rather than a deliberate design choice. Root CLAUDE.md's own line ("Every service, including it, also exposes `GET /version` (or `GET /api/<prefix>/version` where the route needs auth)") had already been describing this as true system-wide before this fix — the code just hadn't matched it for this one service.
+
+**Verified live**: `GET /api/platform/version` through the Ingress now returns `200` with a real `sha`/`buildTime` for an Admin token, `403` for a Player token — same as every other service's admin-gated version route.
+
+**Revisit if:** a seventh service is ever added — give it both `/version` routes from the start, the way every service except `platform-api` already did.
