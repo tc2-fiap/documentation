@@ -25,6 +25,55 @@ kubectl rollout restart deployment/frontend -n fiap-games
 kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
 ```
 
+## Rebuilding every service at once
+
+Sometimes a change genuinely touches all seven images — a shared-kernel file edited in every service's own duplicated copy (`notes.md` 21), or a cross-cutting change like adding a new consumed event to every service. The single-service loop above still applies, just looped:
+
+```bash
+cd repos   # or wherever the seven service repos live, side by side
+
+for svc in users-api catalog-api orders-api payments-api notifications-api platform-api; do
+  cd "$svc"
+  SHA=$(git rev-parse HEAD)
+  TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  case "$svc" in
+    users-api)         apidir="src/FiapGames.Users.Api" ;;
+    catalog-api)        apidir="src/FiapGames.Catalog.Api" ;;
+    orders-api)          apidir="src/FiapGames.Orders.Api" ;;
+    payments-api)        apidir="src/FiapGames.Payments.Api" ;;
+    notifications-api)   apidir="src/FiapGames.Notifications.Api" ;;
+    platform-api)        apidir="src/FiapGames.Platform.Api" ;;
+  esac
+  docker build -t "$svc:latest" --build-arg BUILD_SHA="$SHA" --build-arg BUILD_TIME="$TIME" "$apidir"
+  cd ..
+done
+
+cd frontend && docker build -t frontend:latest . && cd ..
+
+kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
+  payments-api:latest notifications-api:latest platform-api:latest frontend:latest \
+  --name fiap-games
+
+kubectl rollout restart deployment/users-api deployment/catalog-api deployment/orders-api \
+  deployment/payments-api deployment/notifications-api deployment/platform-api \
+  deployment/frontend -n fiap-games
+
+kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
+```
+
+**Watch out for tag corruption in the loop.** Running the `for`/`case` construct above has, at least once, produced a mis-expanded tag — `orders-api:latest` silently becoming `orders-apiatest:latest`, a real image under a wrong name, not just a display glitch (caught via `docker images --format "{{.Repository}}:{{.Tag}}"`, since the corrupted tag's ID matched the build log's manifest hash exactly). The cause wasn't pinned down; building each service as its own standalone command (not inside the loop) reliably avoided it. If in doubt, verify tags with `docker images --format "{{.Repository}}:{{.Tag}}"` before `kind load`, and `docker rmi` anything mis-tagged.
+
+**`rollout restart` is only enough for a pure code change.** If the change also touched anything under `*/k8s/templates/` (a new `securityContext` block, a new ConfigMap key, an env var) `rollout restart` won't pick it up — that only forces a new pod on the *existing* Deployment spec, and the Deployment spec itself is what needs to change. Use `helm upgrade` instead, from `orchestration`:
+
+```bash
+cd orchestration
+helm dependency update .
+helm upgrade fiap-games . -n default
+kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
+```
+
+This re-renders every chart (so template edits actually reach the cluster) and — because `imagePullPolicy: IfNotPresent` means an unchanged image never gets picked up on its own — a service whose *only* change was its image still needs the loop above run first, `helm upgrade` alone won't rebuild or reload anything. The two are independent: rebuild+reload gets new code into containerd, `helm upgrade`/`rollout restart` gets a new pod to actually run it.
+
 ## Verifying a rebuild actually reached the running system
 
 A `rollout status` that says "successfully rolled out" only proves a new pod started — not that the pod is running the code you think it is. `docker build` looking clean and `kind load` printing a new ID both feel like proof too, and for the frontend they actually are; for a .NET backend service, they aren't, for reasons worth understanding rather than working around blindly.

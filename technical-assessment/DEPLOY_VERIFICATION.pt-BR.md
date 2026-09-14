@@ -25,6 +25,55 @@ kubectl rollout restart deployment/frontend -n fiap-games
 kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
 ```
 
+## Reconstruindo todos os serviços de uma vez
+
+Às vezes uma mudança realmente afeta as sete imagens — um arquivo do kernel compartilhado editado na cópia duplicada de cada serviço (`notes.md` 21), ou uma mudança transversal como adicionar um novo evento consumido em todo mundo. O ciclo de um único serviço acima continua valendo, só que em loop:
+
+```bash
+cd repos   # ou onde quer que os sete repos de serviço estejam, lado a lado
+
+for svc in users-api catalog-api orders-api payments-api notifications-api platform-api; do
+  cd "$svc"
+  SHA=$(git rev-parse HEAD)
+  TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  case "$svc" in
+    users-api)         apidir="src/FiapGames.Users.Api" ;;
+    catalog-api)        apidir="src/FiapGames.Catalog.Api" ;;
+    orders-api)          apidir="src/FiapGames.Orders.Api" ;;
+    payments-api)        apidir="src/FiapGames.Payments.Api" ;;
+    notifications-api)   apidir="src/FiapGames.Notifications.Api" ;;
+    platform-api)        apidir="src/FiapGames.Platform.Api" ;;
+  esac
+  docker build -t "$svc:latest" --build-arg BUILD_SHA="$SHA" --build-arg BUILD_TIME="$TIME" "$apidir"
+  cd ..
+done
+
+cd frontend && docker build -t frontend:latest . && cd ..
+
+kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
+  payments-api:latest notifications-api:latest platform-api:latest frontend:latest \
+  --name fiap-games
+
+kubectl rollout restart deployment/users-api deployment/catalog-api deployment/orders-api \
+  deployment/payments-api deployment/notifications-api deployment/platform-api \
+  deployment/frontend -n fiap-games
+
+kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
+```
+
+**Cuidado com corrupção de tag dentro do loop.** Rodar esse `for`/`case` já produziu, pelo menos uma vez, uma tag mal expandida — `orders-api:latest` virando silenciosamente `orders-apiatest:latest`, uma imagem real com o nome errado, não só um glitch de exibição (detectado via `docker images --format "{{.Repository}}:{{.Tag}}"`, já que o ID da tag corrompida batia exatamente com o hash do manifest no log do build). A causa não foi identificada; construir cada serviço como um comando isolado (fora do loop) evitou o problema de forma confiável. Na dúvida, confira as tags com `docker images --format "{{.Repository}}:{{.Tag}}"` antes do `kind load`, e dê `docker rmi` em qualquer coisa com a tag errada.
+
+**O `rollout restart` só é suficiente para uma mudança puramente de código.** Se a mudança também tocou algo em `*/k8s/templates/` (um novo bloco `securityContext`, uma nova chave de ConfigMap, uma variável de ambiente), o `rollout restart` não vai pegar isso — ele só força um pod novo sobre a spec *existente* do Deployment, e é a própria spec do Deployment que precisa mudar. Use `helm upgrade` em vez disso, a partir de `orchestration`:
+
+```bash
+cd orchestration
+helm dependency update .
+helm upgrade fiap-games . -n default
+kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
+```
+
+Isso renderiza novamente cada chart (então as edições de template realmente chegam ao cluster) e — como `imagePullPolicy: IfNotPresent` significa que uma imagem inalterada nunca é repuxada sozinha — um serviço cuja *única* mudança foi a imagem ainda precisa do loop acima rodado primeiro; o `helm upgrade` sozinho não reconstrói nem recarrega nada. Os dois são independentes: reconstruir+recarregar leva código novo até o containerd, `helm upgrade`/`rollout restart` faz um pod novo de fato rodá-lo.
+
 ## Verificando que uma reconstrução realmente chegou ao sistema em execução
 
 Um `rollout status` dizendo "successfully rolled out" só prova que um pod novo iniciou — não que esse pod está rodando o código que você imagina. O `docker build` terminando limpo e o `kind load` imprimindo um ID novo também parecem prova, e pro frontend eles realmente são; para um serviço backend em .NET, não são — por motivos que vale entender, em vez de contornar às cegas.
