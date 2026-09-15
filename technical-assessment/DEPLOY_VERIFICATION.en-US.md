@@ -19,7 +19,7 @@ docker build -t catalog-api:latest -f catalog-api/src/FiapGames.Catalog.Api/Dock
 kind load docker-image frontend:latest catalog-api:latest --name fiap-games
 
 cd orchestration
-helm upgrade fiap-games . -n fiap-games \
+helm upgrade fiap-games . -n default \
   --set frontend.image.repository=frontend --set frontend.image.tag=latest --set frontend.image.pullPolicy=IfNotPresent \
   --set catalog-api.image.repository=catalog-api --set catalog-api.image.tag=latest --set catalog-api.image.pullPolicy=IfNotPresent
 kubectl rollout status deployment/frontend deployment/catalog-api -n fiap-games
@@ -60,7 +60,7 @@ kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
   --name fiap-games
 
 cd orchestration
-helm upgrade fiap-games . -n fiap-games \
+helm upgrade fiap-games . -n default \
   --set users-api.image.repository=users-api --set users-api.image.tag=latest --set users-api.image.pullPolicy=IfNotPresent \
   --set catalog-api.image.repository=catalog-api --set catalog-api.image.tag=latest --set catalog-api.image.pullPolicy=IfNotPresent \
   --set orders-api.image.repository=orders-api --set orders-api.image.tag=latest --set orders-api.image.pullPolicy=IfNotPresent \
@@ -76,7 +76,44 @@ kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=18
 
 **A values override is only enough for a pure code change.** If the change also touched anything under `*/k8s/templates/` (a new `securityContext` block, a new ConfigMap key, an env var), the `helm upgrade` above still re-renders every chart from its current templates (so template edits do reach the cluster) — but double-check the rendered output with `helm template` first if you're unsure the override and the template change interact the way you expect, since both are landing in the same `helm upgrade`.
 
-**Reverting to GHCR.** Once you push the commit, drop every `--set` override (or run `helm upgrade fiap-games . --reset-values -n fiap-games`) — the chart's own defaults take back over and every service goes back to pulling `ghcr.io/tc2-fiap/<name>:latest`.
+**Reverting to GHCR.** Once you push the commit, drop every `--set` override (or run `helm upgrade fiap-games . --reset-values -n default`) — the chart's own defaults take back over and every service goes back to pulling `ghcr.io/tc2-fiap/<name>:latest`.
+
+## Rebuilding every service locally from the published GHCR images
+
+Everything above is about getting *your own, not-yet-pushed* code running. This is the opposite case: no local Dockerfile build at all — just pull the exact images CI already published, load them into `kind`'s containerd, and pin the cluster to those specific local copies instead of leaving it to `Always` re-fetch on its own. Useful for working around a flaky or rate-limited connection to `ghcr.io` after the fact, for guaranteeing you're inspecting the exact bits you just tested rather than whatever `latest` happens to mean if someone pushes again mid-session, or simply as a faster full-system refresh than waiting on 7 separate live pulls:
+
+```bash
+for svc in users-api catalog-api orders-api payments-api notifications-api platform-api frontend; do
+  docker pull "ghcr.io/tc2-fiap/$svc:latest"
+done
+
+kind load docker-image \
+  ghcr.io/tc2-fiap/users-api:latest ghcr.io/tc2-fiap/catalog-api:latest ghcr.io/tc2-fiap/orders-api:latest \
+  ghcr.io/tc2-fiap/payments-api:latest ghcr.io/tc2-fiap/notifications-api:latest ghcr.io/tc2-fiap/platform-api:latest \
+  ghcr.io/tc2-fiap/frontend:latest --name fiap-games
+```
+
+That burst of 7 pulls can hit the same anonymous-pull rate limit `GETTING_STARTED.md` documents for `helm install` itself — a transient `denied` here means the same thing it does there: retry once things cool down, it isn't a real failure.
+
+**`kind load` alone changes nothing yet.** Every chart's default `imagePullPolicy` is `Always`, so kubelet re-contacts `ghcr.io` on the next pod (re)start regardless of what's sitting in containerd — the pull above only stages the bits locally. To actually make the cluster use that pinned local copy instead of live-repulling, flip just the pull policy (the repository and tag are already `ghcr.io/tc2-fiap/<name>:latest` by default, so there's nothing to override there):
+
+```bash
+cd orchestration
+helm upgrade fiap-games . -n default \
+  --set users-api.image.pullPolicy=IfNotPresent \
+  --set catalog-api.image.pullPolicy=IfNotPresent \
+  --set orders-api.image.pullPolicy=IfNotPresent \
+  --set payments-api.image.pullPolicy=IfNotPresent \
+  --set notifications-api.image.pullPolicy=IfNotPresent \
+  --set platform-api.image.pullPolicy=IfNotPresent \
+  --set frontend.image.pullPolicy=IfNotPresent
+
+kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
+```
+
+With `IfNotPresent`, kubelet matches on the image reference itself (`ghcr.io/tc2-fiap/<name>:latest`) against what's already in containerd — since that's the exact reference just loaded, every pod comes up from the local copy with no network round-trip at all, even if GHCR is unreachable or `latest` has since moved on. Confirm it worked the same way any other pull is confirmed: `kubectl describe pod` should show `Container image "ghcr.io/tc2-fiap/<name>:latest" already present on machine`, not a fresh `Pulling image` event.
+
+**Reverting to live `Always` pulls**: drop the `pullPolicy` overrides (or `helm upgrade fiap-games . --reset-values -n default`) — the chart's own default takes back over, and the next pod (re)start goes back to re-fetching from GHCR on every restart.
 
 ## Verifying a rebuild actually reached the running system
 
