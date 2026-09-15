@@ -16,7 +16,7 @@ For what you're looking at architecturally, see [`ARCHITECTURE.en-US.md`](../arc
 - **Outbound internet access to `ghcr.io`** — every service's image is pulled from GHCR at install time (see [step 3](#3-images-are-pulled-automatically)); the cluster already needs the same kind of access to reach Docker Hub for `postgres`/`rabbitmq`, so this isn't a new class of requirement, just a new host.
 - **Host ports 80 and 443 free** — step 2 maps them straight through to the ingress controller; if either is already bound (another local server, a leftover `kind` cluster, etc.), the mapping is silently unpublished and everything reached through `http://localhost` fails with no clear error. Check first: `lsof -i :80` / `lsof -i :443` (or `ss -ltn | grep -E ':80|:443'`) — both should print nothing.
 
-Only needed if you also want to run a single service standalone, or test a local code change before pushing it (see [`DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md)): **.NET 10 SDK**, **Node 22+**, **Docker Compose**, and the **`buildx`** CLI plugin (Docker Desktop bundles it already; a bare Linux Engine install usually doesn't — `docker buildx version`, and `sudo apt install docker-buildx` on Debian/Ubuntu if it prints `unknown command`).
+Only needed if you also want to run a single service standalone instead of the whole cluster: **.NET 10 SDK**, **Node 22+**, **Docker Compose** (see that repo's own `README.md`).
 
 ## 1. Clone the repos
 
@@ -62,8 +62,6 @@ This does mean the cluster needs outbound internet access to `ghcr.io` (same req
 A fresh `helm install` fires all seven of these pulls at once, unauthenticated (the packages are public, so no credential is involved) — GHCR's anonymous-pull token endpoint has been observed to answer a burst like that with a transient `denied` on one or two images, indistinguishable at a glance from a real permission error. It clears on its own: kubelet retries a failed pull with backoff, so a pod that briefly shows `ImagePullBackOff` right after install and then recovers within a minute or so isn't a real problem — only treat it as one if it's still failing several minutes later (see the Troubleshooting table below for that case).
 
 Every `GET /version` endpoint (backends) and `AdminSystemHealthPage`'s frontend row report the exact commit that pulled image was built from — each Dockerfile computes this itself (`git rev-parse HEAD` at build time, baked into `/build-info.json`) rather than it being passed in, so what you see there is always whatever GHCR most recently published for that service's `main`.
-
-If you're iterating on a code change you haven't pushed yet, this step doesn't apply — see [`DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md)'s "Testing a local, uncommitted change" section for building locally and overriding a service back to it.
 
 ## 4. Install the system
 
@@ -251,10 +249,6 @@ kubectl delete pvc -n fiap-games --all   # drops Postgres data too — only if y
 kind delete cluster --name fiap-games
 ```
 
-## Picking up a code change in the running cluster
-
-Push to `main` and `kubectl rollout restart deployment/<service> -n fiap-games` — that's it; every chart's `imagePullPolicy: Always` means the new pod re-pulls GHCR's `latest` on its own. Covered in full, along with the scaled-to-zero recovery case, the "testing a local, uncommitted change" override path, and (the part that matters more) how to actually verify a redeploy reached the running system instead of assuming it did, in [`technical-assessment/DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md).
-
 ## Running one service standalone
 
 Every backend repo and the frontend also run alone via their own `docker-compose.yml`, independent of the cluster — useful for a fast inner dev loop on a single service. See that repo's own `README.md` for the exact command; each brings up just that service plus the Postgres (and RabbitMQ, if it publishes or consumes events) it alone needs.
@@ -268,7 +262,7 @@ Every backend repo and the frontend also run alone via their own `docker-compose
 | `helm dependency update` can't resolve a dependency (`../users-api/k8s` not found, etc.) | The seven sibling repos need to be cloned next to `orchestration/`, with their default folder names — see [step 1](#1-clone-the-repos) |
 | `curl $BASE/...` connection refused | The ingress controller isn't ready yet, or the kind cluster wasn't created with the port mappings in `kind/cluster-config.yaml` |
 | A pod is briefly `ImagePullBackOff`/`ErrImagePull` for `ghcr.io/tc2-fiap/<service>:latest` (`denied`) right after `helm install`, then recovers on its own within a minute or two | GHCR's anonymous-pull token endpoint rate-limits a burst of ~7 simultaneous unauthenticated requests (confirmed live — this is expected, not a real failure); kubelet's own retry-with-backoff clears it without any action from you |
-| The same `denied` error persists for several minutes, or `kubectl get pods -w` never shows it recovering | Either the GHCR package for that repo was made private again (GitHub → repo → Packages → that package's settings → Change visibility → Public, or fall back to the local build path in [`DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md)), or the cluster has no outbound internet access to `ghcr.io` at all — check the same connectivity `postgres`/`rabbitmq`'s Docker Hub pulls already depend on |
+| The same `denied` error persists for several minutes, or `kubectl get pods -w` never shows it recovering | Either the GHCR package for that repo was made private again (GitHub → repo → Packages → that package's settings → Change visibility → Public), or the cluster has no outbound internet access to `ghcr.io` at all — check the same connectivity `postgres`/`rabbitmq`'s Docker Hub pulls already depend on |
 | The "System Health" page (`/admin/system`) shows `sha`/`buildTime` as `unknown` for some service | That service's most recent CI build ran without `.git` in its Docker context (shouldn't happen with the current Dockerfiles, which build from repo root) — check that repo's `docker-build-and-push` CI run rather than anything local, since the image now always comes from GHCR |
 | Google button never appears | Expected with no `Google:ClientId` configured — `GET /api/users/config` reports `googleSignInEnabled: false` and the frontend hides it deliberately, rather than showing a button guaranteed to fail |
 | No email arrives despite `EMAIL_PROVIDER=resend` | Check `notifications-api` logs and the `resend-credentials` Secret — a missing/invalid `RESEND_API_KEY` fails the send and is recorded on the `Notification` row itself (visible via the admin notifications endpoint), not silently swallowed |
