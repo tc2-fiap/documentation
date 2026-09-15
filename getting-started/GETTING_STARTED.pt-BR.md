@@ -91,7 +91,7 @@ Isolamento de schema, confirmado diretamente contra o Postgres — isto deve ser
 
 ```bash
 kubectl exec -n fiap-games deploy/postgres -- \
-  psql -U orders -d fiap_games -c "SELECT * FROM users.\"Users\";"
+  psql -U orders_role -d fiap_games -c "SELECT * FROM users.\"Users\";"
 # ERROR: permission denied for schema users
 ```
 
