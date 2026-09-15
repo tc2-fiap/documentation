@@ -174,3 +174,35 @@ curl -s http://localhost:18080/health; echo
 Em `18080:8080`, só o segundo número é fixo — precisa ser a porta real do Service (`8080` em todo backend aqui, batendo com o `ASPNETCORE_URLS=http://+:8080` de cada container, confirmado pela coluna `PORT(S)` acima). O primeiro número, `18080`, é totalmente arbitrário: é só em qual porta da *sua própria máquina* o túnel vai escutar, escolhida aqui só pra não colidir com algo que já esteja usando `8080` localmente. Qualquer porta local livre serve — `19999:8080`, `8888:8080`, o que estiver livre.
 
 Encerre o port-forward quando terminar (`kill %1`, ou `pkill -f "port-forward.*<serviço>"`) — ele não sai sozinho.
+
+## Adicionando uma nova chamada direta entre serviços
+
+Quase tudo neste sistema fala com o resto através do Ingress (frontend → um backend) ou do RabbitMQ (eventos) — nunca uma chamada HTTP direta de pod para pod. A única exceção é `orders-api → catalog-api` (uma consulta síncrona de preço), e isso não é um acidente de descuido: o cluster aplica um `NetworkPolicy` de negação por padrão para o ingress entre pods (`orchestration/templates/network-policy.yaml`, `notes.md` 93), então `orders-api → catalog-api` é a *única* chamada direta com sua própria regra explícita de liberação, porque é a única que existe hoje.
+
+**Se você adicionar uma nova chamada direta entre dois serviços, ela vai travar silenciosamente.** Isso aconteceu de verdade construindo o próprio conjunto de `NetworkPolicy`: o `POST /api/orders` dava timeout sem erro nenhum em lugar algum, porque nada liberava o `orders-api` para alcançar o `catalog-api` ainda. Um `NetworkPolicy` não recusa uma conexão bloqueada com um erro claro — ele simplesmente descarta os pacotes, então quem chama só vê um timeout de conexão comum, indistinguível à primeira vista de o serviço de destino estar fora do ar ou lento. Se uma nova chamada entre serviços der timeout e o pod de destino estiver saudável (`kubectl get pods` mostra `Running`), verifique `kubectl get networkpolicy -n fiap-games` antes de suspeitar de outra coisa.
+
+**Adicionando uma nova regra de liberação** — mesmo formato da política `allow-orders-to-catalog` já existente em `orchestration/templates/network-policy.yaml`, só trocando os dois nomes de serviço e a porta:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-<quem-chama>-to-<quem-recebe>
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: <quem-recebe>
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: <quem-chama>
+      ports:
+        - protocol: TCP
+          port: 8080
+```
+
+**Ou, liberando geral para todos os serviços de uma vez** — substitua `allow-ingress-nginx`, `allow-orders-to-catalog`, `allow-postgres` e `allow-rabbitmq` por uma única política liberando todo pod de aplicação para alcançar qualquer outro pod de aplicação na porta `8080` (Postgres/RabbitMQ podem manter suas próprias regras mais restritas, ou serem incluídos também). Isso abre mão do próprio motivo de existir do conjunto de políticas — agora, um pod `frontend` comprometido nem consegue tentar uma conexão com `payments-api` ou o Postgres; com uma liberação geral, ele conseguiria alcançar tudo de novo, como antes de qualquer coisa disso existir. Razoável de fazer deliberadamente se uma funcionalidade genuinamente precisar de uma malha de chamadas entre serviços; não é algo para usar só pra fazer uma chamada nova funcionar sem pensar no assunto.

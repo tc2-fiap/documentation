@@ -174,3 +174,35 @@ curl -s http://localhost:18080/health; echo
 In `18080:8080`, only the second number is fixed — that has to be the Service's actual port (`8080` for every backend here, matching each container's own `ASPNETCORE_URLS=http://+:8080`, confirmed by the `PORT(S)` column above). The first number, `18080`, is completely arbitrary: it's just which port on *your own machine* the tunnel listens on, picked here only to avoid clashing with anything already using `8080` locally. Any free local port works — `19999:8080`, `8888:8080`, whatever's free.
 
 Kill the port-forward once done (`kill %1`, or `pkill -f "port-forward.*<service>"`) — it doesn't exit on its own.
+
+## Adding a new direct service-to-service call
+
+Almost everything in this system talks to everything else through the Ingress (frontend → a backend) or RabbitMQ (events) — never a direct pod-to-pod HTTP call. The one exception is `orders-api → catalog-api` (a synchronous price lookup), and that's not an accident of oversight: the cluster enforces a default-deny `NetworkPolicy` for pod-to-pod ingress (`orchestration/templates/network-policy.yaml`, `notes.md` 93), so `orders-api → catalog-api` is the *only* direct call with its own explicit allow rule, because it's the only one that exists today.
+
+**If you add a new direct call between two services, it will silently hang.** This happened for real building the `NetworkPolicy` set itself: `POST /api/orders` timed out with no error anywhere, because nothing allowed `orders-api` to reach `catalog-api` yet. A `NetworkPolicy` doesn't reject a blocked connection with a clear error — it just drops the packets, so the caller sees a plain connection timeout, indistinguishable at a glance from the callee being down or slow. If a new inter-service call times out and the target pod is otherwise healthy (`kubectl get pods` shows it `Running`), check `kubectl get networkpolicy -n fiap-games` before suspecting anything else.
+
+**Adding a new allow rule** — same shape as the existing `allow-orders-to-catalog` policy in `orchestration/templates/network-policy.yaml`, just with the two service names and port changed:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-<caller>-to-<callee>
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: <callee>
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: <caller>
+      ports:
+        - protocol: TCP
+          port: 8080
+```
+
+**Or, loosen it for every service at once** — replace `allow-ingress-nginx`, `allow-orders-to-catalog`, `allow-postgres`, and `allow-rabbitmq` with one policy allowing every app pod to reach every other app pod on `8080` (Postgres/RabbitMQ can keep their own tighter rules, or be included too). This trades away the actual point of the policy set — right now, a compromised `frontend` pod can't even attempt a connection to `payments-api` or Postgres; under a blanket allow, it could reach everything again, same as before any of this existed. Reasonable to do deliberately if a feature genuinely needs a mesh of calls between services; not something to reach for just to make one new call work without thinking about it.
