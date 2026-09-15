@@ -39,7 +39,24 @@ Every command from here on runs from this parent directory (the one now containi
 kind create cluster --config orchestration/kind/cluster-config.yaml
 ```
 
-This creates a one-node cluster named `fiap-games` with host ports 80/443 mapped in and the `ingress-ready` node label set, so an ingress controller can bind those ports directly — no `kubectl port-forward` needed for anything reached through the Ingress.
+This creates a one-node cluster named `fiap-games` with host ports 80/443 mapped in and the `ingress-ready` node label set, so an ingress controller can bind those ports directly — no `kubectl port-forward` needed for anything reached through the Ingress. It also disables `kind`'s default CNI (`cluster-config.yaml`'s `networking.disableDefaultCNI`) — the cluster has no pod networking at all yet, and the node reports `NotReady`, until the next step installs one that actually enforces the `NetworkPolicy` resources this system ships (`kind`'s default CNI doesn't enforce them at all).
+
+Install Calico — the node stays `NotReady` and nothing else can schedule until this is done:
+
+```bash
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.2/manifests/v1_crd_projectcalico_org.yaml
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.2/manifests/tigera-operator.yaml
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.2/manifests/custom-resources.yaml
+kubectl wait --for=condition=ready pod -l k8s-app=calico-node -n calico-system --timeout=180s
+```
+
+`custom-resources.yaml`'s pod CIDR (`192.168.0.0/16`) has to match `cluster-config.yaml`'s `networking.podSubnet` — both already do, since this repo ships them together; only relevant if you ever edit one without the other. Verify the node actually came up before moving on:
+
+```bash
+kubectl get nodes
+```
+
+Expect `Ready`, not `NotReady` — if it's still `NotReady` after the `wait` above returned, something about the CNI install didn't take.
 
 Install nginx-ingress into it:
 

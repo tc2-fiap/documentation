@@ -39,7 +39,24 @@ Todo comando a partir daqui roda a partir desse diretório pai (o que agora cont
 kind create cluster --config orchestration/kind/cluster-config.yaml
 ```
 
-Isso cria um cluster de um nó chamado `fiap-games`, com as portas 80/443 do host mapeadas e o label de nó `ingress-ready` definido, para que um controlador de ingress possa se ligar diretamente a essas portas — sem necessidade de `kubectl port-forward` para nada acessado pelo Ingress.
+Isso cria um cluster de um nó chamado `fiap-games`, com as portas 80/443 do host mapeadas e o label de nó `ingress-ready` definido, para que um controlador de ingress possa se ligar diretamente a essas portas — sem necessidade de `kubectl port-forward` para nada acessado pelo Ingress. Também desativa o CNI padrão do `kind` (`networking.disableDefaultCNI` no `cluster-config.yaml`) — o cluster fica sem rede de pods nenhuma por enquanto, e o nó aparece como `NotReady`, até o próximo passo instalar um CNI que realmente aplique os recursos `NetworkPolicy` que este sistema já traz (o CNI padrão do `kind` simplesmente os ignora).
+
+Instale o Calico — o nó continua `NotReady` e nada mais consegue ser agendado até isso terminar:
+
+```bash
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.2/manifests/v1_crd_projectcalico_org.yaml
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.2/manifests/tigera-operator.yaml
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.2/manifests/custom-resources.yaml
+kubectl wait --for=condition=ready pod -l k8s-app=calico-node -n calico-system --timeout=180s
+```
+
+O CIDR de pods do `custom-resources.yaml` (`192.168.0.0/16`) precisa bater com o `networking.podSubnet` do `cluster-config.yaml` — os dois já batem, já que este repositório os distribui juntos; só importa se algum dia você editar um sem o outro. Confirme que o nó realmente subiu antes de continuar:
+
+```bash
+kubectl get nodes
+```
+
+Espere `Ready`, não `NotReady` — se ainda estiver `NotReady` depois do `wait` acima ter retornado, algo na instalação do CNI não pegou.
 
 Instale o nginx-ingress nele:
 
