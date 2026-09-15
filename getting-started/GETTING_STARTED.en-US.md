@@ -8,14 +8,15 @@ For what you're looking at architecturally, see [`ARCHITECTURE.en-US.md`](../arc
 
 ## Prerequisites
 
-- **Docker**, with the **`buildx`** CLI plugin — kind runs the cluster as a container, and `buildx` is what makes `docker build` use BuildKit instead of the deprecated legacy builder. Docker Desktop bundles it already; a bare Linux Engine install (e.g. Ubuntu's `docker.io` package) usually doesn't — check with `docker buildx version` and, if it prints `unknown command`, install it separately (`sudo apt install docker-buildx` on Debian/Ubuntu). No build command changes once it's installed; `docker build` picks up BuildKit on its own.
+- **Docker** — kind runs the cluster as a container.
 - **kind** (Kubernetes in Docker) — the local cluster.
 - **kubectl**
 - **Helm** (v3)
 - **jq** and **curl** — used in the walkthrough below to keep tokens out of your shell history in plain sight; not required by the system itself.
+- **Outbound internet access to `ghcr.io`** — every service's image is pulled from GHCR at install time (see [step 3](#3-images-are-pulled-automatically)); the cluster already needs the same kind of access to reach Docker Hub for `postgres`/`rabbitmq`, so this isn't a new class of requirement, just a new host.
 - **Host ports 80 and 443 free** — step 2 maps them straight through to the ingress controller; if either is already bound (another local server, a leftover `kind` cluster, etc.), the mapping is silently unpublished and everything reached through `http://localhost` fails with no clear error. Check first: `lsof -i :80` / `lsof -i :443` (or `ss -ltn | grep -E ':80|:443'`) — both should print nothing.
 
-Only needed if you also want to run a single service standalone instead of the whole cluster: **.NET 10 SDK**, **Node 22+**, **Docker Compose** (see that repo's own `README.md`).
+Only needed if you also want to run a single service standalone, or test a local code change before pushing it (see [`DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md)): **.NET 10 SDK**, **Node 22+**, **Docker Compose**, and the **`buildx`** CLI plugin (Docker Desktop bundles it already; a bare Linux Engine install usually doesn't — `docker buildx version`, and `sudo apt install docker-buildx` on Debian/Ubuntu if it prints `unknown command`).
 
 ## 1. Clone the repos
 
@@ -52,42 +53,17 @@ kubectl wait --namespace ingress-nginx \
 
 The `kubectl wait` typically takes around 30 seconds — the controller image needs to pull and its admission-webhook jobs need to complete before the pod reports ready. Let it run to completion rather than interrupting it; installing the chart before the controller (and its webhook Service) is actually ready fails with a `connection refused` calling `ingress-nginx-controller-admission`.
 
-## 3. Build and load the images
+## 3. Images are pulled automatically
 
-Each service ships its own `Dockerfile` — the six backend services have theirs at `<repo>/src/FiapGames.<Name>.Api/Dockerfile`, `frontend`'s is at its repo root — and the chart expects the resulting images already sitting in the cluster; nothing here pulls from a registry. Build each with the name its own `k8s/values.yaml` expects (`repository: <name>`, `tag: latest`), then load them straight into `kind`'s containerd. The build context for every service is its **own repo root** (not the service subfolder), so pass `-f` to point at the nested Dockerfile:
+Nothing to build. Every service's `k8s/values.yaml` already points at `ghcr.io/tc2-fiap/<name>:latest` with `imagePullPolicy: Always` — CI pushes a fresh image there on every commit to each repo's `main` (`docker-build-and-push` job in that repo's own `.github/workflows/ci.yml`). `helm install` in the next step pulls all seven straight from GHCR, the same way it already pulls the `postgres`/`rabbitmq` images from Docker Hub — no local Dockerfile build, no `kind load docker-image`.
 
-```bash
-docker build -t users-api:latest -f users-api/src/FiapGames.Users.Api/Dockerfile users-api
-docker build -t catalog-api:latest -f catalog-api/src/FiapGames.Catalog.Api/Dockerfile catalog-api
-docker build -t orders-api:latest -f orders-api/src/FiapGames.Orders.Api/Dockerfile orders-api
-docker build -t payments-api:latest -f payments-api/src/FiapGames.Payments.Api/Dockerfile payments-api
-docker build -t notifications-api:latest -f notifications-api/src/FiapGames.Notifications.Api/Dockerfile notifications-api
-docker build -t platform-api:latest -f platform-api/src/FiapGames.Platform.Api/Dockerfile platform-api
-docker build -t frontend:latest frontend
+This does mean the cluster needs outbound internet access to `ghcr.io` (same requirement as reaching Docker Hub for `postgres`/`rabbitmq`, not a new category of dependency) and, because the tag floats and the policy is `Always`, every pod (re)start re-pulls whatever is currently on `main` for that service — there's no "already loaded, skip it" fast path here the way there is for Postgres/RabbitMQ's `IfNotPresent` images.
 
-kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
-  payments-api:latest notifications-api:latest platform-api:latest frontend:latest --name fiap-games
-```
+A fresh `helm install` fires all seven of these pulls at once, unauthenticated (the packages are public, so no credential is involved) — GHCR's anonymous-pull token endpoint has been observed to answer a burst like that with a transient `denied` on one or two images, indistinguishable at a glance from a real permission error. It clears on its own: kubelet retries a failed pull with backoff, so a pod that briefly shows `ImagePullBackOff` right after install and then recovers within a minute or so isn't a real problem — only treat it as one if it's still failing several minutes later (see the Troubleshooting table below for that case).
 
-Every `GET /version` endpoint (backends) and `AdminSystemHealthPage`'s frontend row report the exact commit each image was built from — each Dockerfile computes this itself (`git rev-parse HEAD`, `.git` is present since the build context is the repo root) and bakes it into the image, no `--build-arg` to remember or forget. See `notes.md` for why this replaced an earlier `--build-arg BUILD_SHA`/`BUILD_TIME` approach that was easy to get wrong (pass it, or compute it against a not-yet-committed `HEAD`) — this project hit both failure modes in practice.
+Every `GET /version` endpoint (backends) and `AdminSystemHealthPage`'s frontend row report the exact commit that pulled image was built from — each Dockerfile computes this itself (`git rev-parse HEAD` at build time, baked into `/build-info.json`) rather than it being passed in, so what you see there is always whatever GHCR most recently published for that service's `main`.
 
-Verify every image was both built and actually loaded into the cluster's containerd before moving on — this is the check that would have caught the `ImagePullBackOff` failure mode in the Troubleshooting table below, before `helm install` ever ran:
-
-```bash
-NODE=fiap-games-control-plane
-LOADED=$(docker exec "$NODE" crictl images)
-for img in users-api catalog-api orders-api payments-api notifications-api platform-api frontend; do
-  if ! docker image inspect "${img}:latest" >/dev/null 2>&1; then
-    echo "✗ ${img}:latest — not built locally"
-  elif ! echo "$LOADED" | grep -qE "^docker.io/library/${img}\s+latest\s"; then
-    echo "✗ ${img}:latest — built but NOT loaded into kind (kind load docker-image ${img}:latest --name fiap-games)"
-  else
-    echo "✓ ${img}:latest — built and loaded"
-  fi
-done
-```
-
-All seven lines should print `✓` (the script uses `${img}:latest` rather than `$img:latest` deliberately — in zsh, unbraced `$var:latest` is parsed as the `:l` history modifier applied to `$var`, silently mangling the string to `users-apiatest`). Re-run this whole step (rebuild, then reload) after changing any service's code — `kind load docker-image` is what actually gets a new build into the cluster; a plain `docker build` on its own is invisible to it.
+If you're iterating on a code change you haven't pushed yet, this step doesn't apply — see [`DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md)'s "Testing a local, uncommitted change" section for building locally and overriding a service back to it.
 
 ## 4. Install the system
 
@@ -277,7 +253,7 @@ kind delete cluster --name fiap-games
 
 ## Picking up a code change in the running cluster
 
-Covered in [`technical-assessment/DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md) — rebuild, `kind load docker-image`, `kubectl rollout restart`, the scaled-to-zero recovery case, and (the part that matters more) how to actually verify the rebuild reached the running system instead of assuming it did.
+Push to `main` and `kubectl rollout restart deployment/<service> -n fiap-games` — that's it; every chart's `imagePullPolicy: Always` means the new pod re-pulls GHCR's `latest` on its own. Covered in full, along with the scaled-to-zero recovery case, the "testing a local, uncommitted change" override path, and (the part that matters more) how to actually verify a redeploy reached the running system instead of assuming it did, in [`technical-assessment/DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md).
 
 ## Running one service standalone
 
@@ -291,9 +267,9 @@ Every backend repo and the frontend also run alone via their own `docker-compose
 | `helm install` complains about a missing chart archive | Run `helm dependency update` in `orchestration/` first — the umbrella chart's dependencies are local `file://` paths that need resolving into `charts/*.tgz` |
 | `helm dependency update` can't resolve a dependency (`../users-api/k8s` not found, etc.) | The seven sibling repos need to be cloned next to `orchestration/`, with their default folder names — see [step 1](#1-clone-the-repos) |
 | `curl $BASE/...` connection refused | The ingress controller isn't ready yet, or the kind cluster wasn't created with the port mappings in `kind/cluster-config.yaml` |
-| A pod is `ImagePullBackOff`/`ErrImagePull` for `<service>:latest` (`pull access denied, repository does not exist`) | The image was never built and loaded into the cluster — see [step 3](#3-build-and-load-the-images); a plain `docker build` alone doesn't reach `kind`'s containerd, only `kind load docker-image` does |
-| `docker build` prints `DEPRECATED: The legacy builder is deprecated and will be removed in a future release` | The build still completes — this is just a warning, not a failure — but install the `buildx` plugin (see Prerequisites) so it uses BuildKit instead |
-| The "System Health" page (`/admin/system`) shows `sha`/`buildTime` as `unknown` for some service | The image was built with a Docker context that didn't include `.git` (e.g. the old per-service-subfolder context) — each Dockerfile computes this itself via `git rev-parse HEAD` now, which silently falls back to `"unknown"` rather than failing if `.git` isn't reachable. Rebuild with the exact `-f`/context shape in [step 3](#3-build-and-load-the-images); see [`DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md) |
+| A pod is briefly `ImagePullBackOff`/`ErrImagePull` for `ghcr.io/tc2-fiap/<service>:latest` (`denied`) right after `helm install`, then recovers on its own within a minute or two | GHCR's anonymous-pull token endpoint rate-limits a burst of ~7 simultaneous unauthenticated requests (confirmed live — this is expected, not a real failure); kubelet's own retry-with-backoff clears it without any action from you |
+| The same `denied` error persists for several minutes, or `kubectl get pods -w` never shows it recovering | Either the GHCR package for that repo was made private again (GitHub → repo → Packages → that package's settings → Change visibility → Public, or fall back to the local build path in [`DEPLOY_VERIFICATION.en-US.md`](../technical-assessment/DEPLOY_VERIFICATION.en-US.md)), or the cluster has no outbound internet access to `ghcr.io` at all — check the same connectivity `postgres`/`rabbitmq`'s Docker Hub pulls already depend on |
+| The "System Health" page (`/admin/system`) shows `sha`/`buildTime` as `unknown` for some service | That service's most recent CI build ran without `.git` in its Docker context (shouldn't happen with the current Dockerfiles, which build from repo root) — check that repo's `docker-build-and-push` CI run rather than anything local, since the image now always comes from GHCR |
 | Google button never appears | Expected with no `Google:ClientId` configured — `GET /api/users/config` reports `googleSignInEnabled: false` and the frontend hides it deliberately, rather than showing a button guaranteed to fail |
 | No email arrives despite `EMAIL_PROVIDER=resend` | Check `notifications-api` logs and the `resend-credentials` Secret — a missing/invalid `RESEND_API_KEY` fails the send and is recorded on the `Notification` row itself (visible via the admin notifications endpoint), not silently swallowed |
 | Catalog prices show in BRL even with the toggle set to English | `GET /api/quotations/usd-brl` returned `409` — both Frankfurter and ExchangeRate-API are unreachable (usually a cluster with no outbound internet access); the frontend degrades to native BRL by design rather than showing a broken price, see `catalog-api` logs for which provider failed and why |

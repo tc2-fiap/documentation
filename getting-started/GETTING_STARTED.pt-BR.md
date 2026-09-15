@@ -8,14 +8,15 @@ Para entender a arquitetura, veja [`ARCHITECTURE.pt-BR.md`](../architecture/ARCH
 
 ## Pré-requisitos
 
-- **Docker**, com o plugin de CLI **`buildx`** — o kind roda o cluster como um container, e é o `buildx` que faz o `docker build` usar o BuildKit em vez do builder antigo (legacy), já depreciado. O Docker Desktop já vem com ele; uma instalação Linux só com o Engine (ex.: pacote `docker.io` do Ubuntu) geralmente não vem — verifique com `docker buildx version` e, se aparecer `unknown command`, instale separadamente (`sudo apt install docker-buildx` no Debian/Ubuntu). Nenhum comando de build muda depois de instalado; o `docker build` passa a usar o BuildKit sozinho.
+- **Docker** — o kind roda o cluster como um container.
 - **kind** (Kubernetes in Docker) — o cluster local.
 - **kubectl**
 - **Helm** (v3)
 - **jq** e **curl** — usados no passo a passo abaixo para manter tokens fora do seu histórico do shell de forma visível; não são exigidos pelo sistema em si.
+- **Acesso de saída à internet para `ghcr.io`** — a imagem de cada serviço é puxada do GHCR no momento da instalação (veja o [passo 3](#3-as-imagens-são-puxadas-automaticamente)); o cluster já precisa desse mesmo tipo de acesso para chegar ao Docker Hub para `postgres`/`rabbitmq`, então isso não é uma nova categoria de requisito, só um novo host.
 - **Portas 80 e 443 livres no host** — o passo 2 as mapeia diretamente para o ingress controller; se alguma já estiver ocupada (outro servidor local, um cluster `kind` anterior ainda de pé, etc.), o mapeamento fica silenciosamente sem efeito e tudo que passa por `http://localhost` falha sem erro claro. Verifique antes: `lsof -i :80` / `lsof -i :443` (ou `ss -ltn | grep -E ':80|:443'`) — ambos devem retornar vazio.
 
-Necessário apenas se você também quiser rodar um único serviço de forma independente, sem o cluster inteiro: **.NET 10 SDK**, **Node 22+**, **Docker Compose** (veja o próprio `README.md` daquele repositório).
+Necessário apenas se você também quiser rodar um único serviço de forma independente, ou testar uma alteração de código local antes de dar push (veja [`DEPLOY_VERIFICATION.pt-BR.md`](../technical-assessment/DEPLOY_VERIFICATION.pt-BR.md)): **.NET 10 SDK**, **Node 22+**, **Docker Compose**, e o plugin de CLI **`buildx`** (o Docker Desktop já vem com ele; uma instalação Linux só com o Engine geralmente não vem — `docker buildx version`, e `sudo apt install docker-buildx` no Debian/Ubuntu se aparecer `unknown command`).
 
 ## 1. Clonar os repositórios
 
@@ -52,42 +53,17 @@ kubectl wait --namespace ingress-nginx \
 
 Esse `kubectl wait` geralmente leva cerca de 30 segundos — a imagem do controlador precisa ser baixada e os jobs do admission webhook precisam terminar antes do pod reportar prontidão. Deixe rodar até o fim em vez de interromper — instalar o chart antes do controlador (e do Service do seu webhook) estar realmente pronto falha com `connection refused` ao chamar `ingress-nginx-controller-admission`.
 
-## 3. Construir e carregar as imagens
+## 3. As imagens são puxadas automaticamente
 
-Cada serviço tem seu próprio `Dockerfile` — os seis serviços de backend têm o deles em `<repo>/src/FiapGames.<Nome>.Api/Dockerfile`, o do `frontend` fica na raiz do próprio repositório — e o chart espera que as imagens resultantes já estejam no cluster; nada aqui puxa de um registry. Construa cada uma com o nome que o próprio `k8s/values.yaml` do serviço espera (`repository: <nome>`, `tag: latest`) e carregue-as diretamente no containerd do `kind`. O contexto de build de cada serviço é a **raiz do próprio repositório** (não a subpasta do serviço), então passe `-f` apontando pro Dockerfile aninhado:
+Nada para construir. O `k8s/values.yaml` de cada serviço já aponta para `ghcr.io/tc2-fiap/<nome>:latest` com `imagePullPolicy: Always` — o CI publica uma imagem nova ali a cada commit na `main` de cada repositório (job `docker-build-and-push` no próprio `.github/workflows/ci.yml` daquele repo). O `helm install` do próximo passo puxa as sete direto do GHCR, do mesmo jeito que já puxa as imagens de `postgres`/`rabbitmq` do Docker Hub — sem build local de Dockerfile, sem `kind load docker-image`.
 
-```bash
-docker build -t users-api:latest -f users-api/src/FiapGames.Users.Api/Dockerfile users-api
-docker build -t catalog-api:latest -f catalog-api/src/FiapGames.Catalog.Api/Dockerfile catalog-api
-docker build -t orders-api:latest -f orders-api/src/FiapGames.Orders.Api/Dockerfile orders-api
-docker build -t payments-api:latest -f payments-api/src/FiapGames.Payments.Api/Dockerfile payments-api
-docker build -t notifications-api:latest -f notifications-api/src/FiapGames.Notifications.Api/Dockerfile notifications-api
-docker build -t platform-api:latest -f platform-api/src/FiapGames.Platform.Api/Dockerfile platform-api
-docker build -t frontend:latest frontend
+Isso significa que o cluster precisa de acesso de saída à internet para `ghcr.io` (o mesmo tipo de acesso que já é necessário para chegar ao Docker Hub em busca de `postgres`/`rabbitmq`, não uma nova categoria de dependência) e, como a tag é flutuante e a política é `Always`, cada (re)início de pod busca de novo o que estiver atualmente na `main` daquele serviço — não existe aqui o atalho "já carregada, pode pular" que `postgres`/`rabbitmq` têm com `IfNotPresent`.
 
-kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
-  payments-api:latest notifications-api:latest platform-api:latest frontend:latest --name fiap-games
-```
+Um `helm install` do zero dispara essas sete buscas de uma vez, sem autenticação (os pacotes são públicos, não há credencial envolvida) — o endpoint de token para pull anônimo do GHCR já foi observado respondendo a uma rajada dessas com um `denied` transitório em uma ou duas imagens, indistinguível à primeira vista de um erro de permissão de verdade. Isso se resolve sozinho: o kubelet tenta de novo o pull com backoff, então um pod que aparece rapidamente como `ImagePullBackOff` logo depois da instalação e se recupera em um minuto ou dois não é um problema real — só trate como um se continuar falhando vários minutos depois (veja a tabela de Solução de problemas abaixo para esse caso).
 
-Todo `GET /version` (backends) e a linha do frontend em `AdminSystemHealthPage` mostram o commit exato de onde cada imagem foi construída — cada Dockerfile calcula isso sozinho (`git rev-parse HEAD`, o `.git` está presente já que o contexto de build é a raiz do repositório) e grava dentro da imagem, sem `--build-arg` pra lembrar ou esquecer. Veja `notes.md` para o porquê disso ter substituído uma abordagem anterior com `--build-arg BUILD_SHA`/`BUILD_TIME`, fácil de errar na prática (esquecer de passar, ou calcular contra um `HEAD` ainda não commitado) — este projeto já bateu nos dois casos.
+Todo `GET /version` (backends) e a linha do frontend em `AdminSystemHealthPage` mostram o commit exato de onde aquela imagem puxada foi construída — cada Dockerfile calcula isso sozinho (`git rev-parse HEAD` no momento do build, gravado em `/build-info.json`) em vez de receber isso de fora, então o que aparece ali é sempre o que o GHCR publicou mais recentemente para a `main` daquele serviço.
 
-Verifique se cada imagem foi de fato construída e carregada no containerd do cluster antes de seguir em frente — é a checagem que teria pego o `ImagePullBackOff` da tabela de Solução de problemas antes mesmo do `helm install` rodar:
-
-```bash
-NODE=fiap-games-control-plane
-LOADED=$(docker exec "$NODE" crictl images)
-for img in users-api catalog-api orders-api payments-api notifications-api platform-api frontend; do
-  if ! docker image inspect "${img}:latest" >/dev/null 2>&1; then
-    echo "✗ ${img}:latest — não foi construída localmente"
-  elif ! echo "$LOADED" | grep -qE "^docker.io/library/${img}\s+latest\s"; then
-    echo "✗ ${img}:latest — construída mas NÃO carregada no kind (kind load docker-image ${img}:latest --name fiap-games)"
-  else
-    echo "✓ ${img}:latest — construída e carregada"
-  fi
-done
-```
-
-Todas as sete linhas devem mostrar `✓` (o script usa `${img}:latest` em vez de `$img:latest` de propósito — no zsh, `$var:latest` sem chaves é interpretado como o modificador de histórico `:l` aplicado a `$var`, corrompendo silenciosamente a string para `users-apiatest`). Repita este passo inteiro (reconstruir e recarregar) depois de alterar o código de qualquer serviço — é o `kind load docker-image` que efetivamente leva uma nova build até o cluster; um `docker build` isolado é invisível para ele.
+Se você está iterando em uma alteração de código que ainda não deu push, este passo não se aplica — veja a seção "Testando uma alteração local, ainda não commitada" em [`DEPLOY_VERIFICATION.pt-BR.md`](../technical-assessment/DEPLOY_VERIFICATION.pt-BR.md) para construir localmente e sobrescrever um serviço de volta para ela.
 
 ## 4. Instalar o sistema
 
@@ -277,7 +253,7 @@ kind delete cluster --name fiap-games
 
 ## Levando uma alteração de código até o cluster em execução
 
-Coberto em [`technical-assessment/DEPLOY_VERIFICATION.pt-BR.md`](../technical-assessment/DEPLOY_VERIFICATION.pt-BR.md) — reconstruir, `kind load docker-image`, `kubectl rollout restart`, o caso de recuperação quando tudo está escalado a zero e, mais importante, como verificar de verdade que a reconstrução chegou ao sistema em execução em vez de simplesmente assumir isso.
+Dê push na `main` e rode `kubectl rollout restart deployment/<serviço> -n fiap-games` — só isso; o `imagePullPolicy: Always` de todo chart faz o pod novo repuxar sozinho o `latest` do GHCR. Coberto por completo — incluindo o caso de recuperação quando tudo está escalado a zero, o caminho de override para "testar uma alteração local ainda não commitada" e, mais importante, como verificar de verdade que um redeploy chegou ao sistema em execução em vez de simplesmente assumir isso — em [`technical-assessment/DEPLOY_VERIFICATION.pt-BR.md`](../technical-assessment/DEPLOY_VERIFICATION.pt-BR.md).
 
 ## Rodando um serviço isolado
 
@@ -291,9 +267,9 @@ Todo repositório de backend e o frontend também rodam sozinhos via seu própri
 | `helm install` reclama de um chart archive faltando | Rode `helm dependency update` em `orchestration/` primeiro — as dependências do chart guarda-chuva são caminhos locais `file://` que precisam ser resolvidos em `charts/*.tgz` |
 | `helm dependency update` não consegue resolver uma dependência (`../users-api/k8s` não encontrado, etc.) | Os sete repositórios irmãos precisam estar clonados ao lado de `orchestration/`, com seus nomes de pasta padrão — veja o [passo 1](#1-clonar-os-repositórios) |
 | `curl $BASE/...` dá connection refused | O controlador de ingress ainda não está pronto, ou o cluster kind não foi criado com os mapeamentos de porta em `kind/cluster-config.yaml` |
-| Um pod fica em `ImagePullBackOff`/`ErrImagePull` para `<service>:latest` (`pull access denied, repository does not exist`) | A imagem nunca foi construída nem carregada no cluster — veja o [passo 3](#3-construir-e-carregar-as-imagens); um `docker build` isolado não chega ao containerd do `kind`, só o `kind load docker-image` faz isso |
-| `docker build` imprime `DEPRECATED: The legacy builder is deprecated and will be removed in a future release` | O build ainda termina normalmente — é só um aviso, não uma falha — mas instale o plugin `buildx` (veja Pré-requisitos) para que ele use o BuildKit em vez do builder antigo |
-| A página "Saúde do Sistema" (`/admin/system`) mostra `sha`/`buildTime` como `unknown` para algum serviço | A imagem foi construída com um contexto de build que não incluía o `.git` (ex.: o contexto antigo, na subpasta do serviço) — cada Dockerfile calcula isso sozinho via `git rev-parse HEAD` agora, que cai silenciosamente em `"unknown"` em vez de falhar se o `.git` não estiver acessível. Reconstrua com o `-f`/contexto exatos do [passo 3](#3-construir-e-carregar-as-imagens); veja [`DEPLOY_VERIFICATION.pt-BR.md`](../technical-assessment/DEPLOY_VERIFICATION.pt-BR.md) |
+| Um pod fica brevemente em `ImagePullBackOff`/`ErrImagePull` para `ghcr.io/tc2-fiap/<service>:latest` (`denied`) logo depois do `helm install`, e se recupera sozinho em um ou dois minutos | O endpoint de token para pull anônimo do GHCR limita uma rajada de ~7 requisições simultâneas sem autenticação (confirmado ao vivo — isso é esperado, não uma falha real); o próprio kubelet tenta de novo com backoff e resolve sozinho, sem nenhuma ação sua |
+| O mesmo erro `denied` persiste por vários minutos, ou o `kubectl get pods -w` nunca mostra a recuperação | Ou o pacote GHCR daquele repositório foi tornado privado de novo (GitHub → repositório → Packages → configurações daquele pacote → Change visibility → Public, ou use o caminho de build local em [`DEPLOY_VERIFICATION.pt-BR.md`](../technical-assessment/DEPLOY_VERIFICATION.pt-BR.md)), ou o cluster não tem acesso de saída à internet para `ghcr.io` de forma alguma — verifique a mesma conectividade da qual os pulls de `postgres`/`rabbitmq` no Docker Hub já dependem |
+| A página "Saúde do Sistema" (`/admin/system`) mostra `sha`/`buildTime` como `unknown` para algum serviço | A build mais recente do CI daquele serviço rodou sem o `.git` no contexto de build (não deveria acontecer com os Dockerfiles atuais, que constroem a partir da raiz do repositório) — verifique a execução do `docker-build-and-push` daquele repositório no CI em vez de qualquer coisa local, já que a imagem agora sempre vem do GHCR |
 | O botão do Google nunca aparece | Esperado quando não há `Google:ClientId` configurado — `GET /api/users/config` reporta `googleSignInEnabled: false` e o frontend o esconde deliberadamente, em vez de mostrar um botão fadado a falhar |
 | Nenhum e-mail chega apesar de `EMAIL_PROVIDER=resend` | Verifique os logs do `notifications-api` e o Secret `resend-credentials` — uma `RESEND_API_KEY` ausente/inválida faz o envio falhar, e isso fica registrado na própria linha de `Notification` (visível via o endpoint admin de notificações), não é silenciosamente engolido |
 | Preços do catálogo aparecem em BRL mesmo com a alternância em inglês | `GET /api/quotations/usd-brl` retornou `409` — tanto o Frankfurter quanto o ExchangeRate-API estão inacessíveis (geralmente um cluster sem acesso de saída à internet); o frontend degrada para o BRL nativo por design, em vez de mostrar um preço quebrado — veja os logs do `catalog-api` para saber qual provedor falhou e por quê |

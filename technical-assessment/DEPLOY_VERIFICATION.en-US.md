@@ -4,9 +4,11 @@
 
 How to get one service's new code into the already-running cluster, and — the part that actually matters — how to *prove* it got there instead of assuming it did. For the initial cluster bring-up itself, see [`GETTING_STARTED.en-US.md`](../getting-started/GETTING_STARTED.en-US.md).
 
-## Redeploying a single service after a code change
+**The default flow needs none of this.** Every `k8s/values.yaml` points at `ghcr.io/tc2-fiap/<service>:latest` with `imagePullPolicy: Always`, and CI pushes a new image there on every commit to that repo's `main` — so a plain `kubectl rollout restart deployment/<service> -n fiap-games` (no rebuild, no `kind load`) is all a normal "pick up the latest pushed code" redeploy needs; the pod that comes up re-pulls `latest` from GHCR on its own. Everything below is for the case that new commit *isn't* on GHCR yet — testing an uncommitted local change before you push it.
 
-The cluster is already running — this is the loop for picking up new code in it, not a fresh install. Rebuild that one service's image, load it into `kind`'s containerd (same idea as `GETTING_STARTED.md`'s "Build and load the images" step, just for one image), then force the Deployment to actually use it:
+## Testing a local, uncommitted change
+
+Because every chart's default `imagePullPolicy` is now `Always` against a GHCR tag, `kind load docker-image` alone does nothing here anymore — kubelet contacts the registry on every pod (re)start regardless of what's sitting in containerd, so a locally-loaded image is silently ignored unless you also point that service's `image.*` values back at it. Build, load, **and** override in the same `helm upgrade`:
 
 ```bash
 docker build -t frontend:latest frontend
@@ -14,24 +16,27 @@ docker build -t frontend:latest frontend
 # at the nested Dockerfile — e.g.:
 docker build -t catalog-api:latest -f catalog-api/src/FiapGames.Catalog.Api/Dockerfile catalog-api
 
-kind load docker-image frontend:latest --name fiap-games
-kubectl rollout restart deployment/frontend -n fiap-games
-kubectl rollout status deployment/frontend -n fiap-games
+kind load docker-image frontend:latest catalog-api:latest --name fiap-games
+
+cd orchestration
+helm upgrade fiap-games . -n fiap-games \
+  --set frontend.image.repository=frontend --set frontend.image.tag=latest --set frontend.image.pullPolicy=IfNotPresent \
+  --set catalog-api.image.repository=catalog-api --set catalog-api.image.tag=latest --set catalog-api.image.pullPolicy=IfNotPresent
+kubectl rollout status deployment/frontend deployment/catalog-api -n fiap-games
 ```
 
-The `rollout restart` step is not optional. Every chart sets `imagePullPolicy: IfNotPresent` (`k8s/values.yaml`), so an already-running pod never notices that `kind load docker-image` replaced what `<service>:latest` points to in containerd — only a *new* pod re-evaluates the tag, and only `rollout restart` creates one. Skipping it silently leaves the old build running with no error anywhere.
+The three `--set` flags per service are what actually matter — they're what makes `IfNotPresent` (and therefore your `kind load`ed image) apply again instead of `Always` re-fetching GHCR's `latest` and ignoring it. Repeat the `--set` triplet for whichever services you're testing; a plain `helm upgrade fiap-games .` with no overrides (or `--reset-values`) snaps every service straight back to pulling GHCR's `latest`.
 
-If every deployment in the namespace is scaled to zero (e.g. after an idle teardown that kept the release instead of uninstalling it), `rollout restart` has nothing to restart — scale back up first, then restart just the service you rebuilt:
+If every deployment in the namespace is scaled to zero (e.g. after an idle teardown that kept the release instead of uninstalling it), there's no pod for `rollout restart`/`helm upgrade` to replace — scale back up first:
 
 ```bash
 kubectl scale deployment --all -n fiap-games --replicas=1
-kubectl rollout restart deployment/frontend -n fiap-games
 kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
 ```
 
-## Rebuilding every service at once
+## Testing every service's local changes at once
 
-Sometimes a change genuinely touches all seven images — a shared-kernel file edited in every service's own duplicated copy (`notes.md` 21), or a cross-cutting change like adding a new consumed event to every service. The single-service loop above still applies, just looped:
+Sometimes a change genuinely touches all seven images — a shared-kernel file edited in every service's own duplicated copy (`notes.md` 21), or a cross-cutting change like adding a new consumed event to every service. The single-service loop above still applies, just looped, with every service's three `--set` overrides collected into one `helm upgrade`:
 
 ```bash
 cd repos   # or wherever the seven service repos live, side by side
@@ -54,25 +59,24 @@ kind load docker-image users-api:latest catalog-api:latest orders-api:latest \
   payments-api:latest notifications-api:latest platform-api:latest frontend:latest \
   --name fiap-games
 
-kubectl rollout restart deployment/users-api deployment/catalog-api deployment/orders-api \
-  deployment/payments-api deployment/notifications-api deployment/platform-api \
-  deployment/frontend -n fiap-games
+cd orchestration
+helm upgrade fiap-games . -n fiap-games \
+  --set users-api.image.repository=users-api --set users-api.image.tag=latest --set users-api.image.pullPolicy=IfNotPresent \
+  --set catalog-api.image.repository=catalog-api --set catalog-api.image.tag=latest --set catalog-api.image.pullPolicy=IfNotPresent \
+  --set orders-api.image.repository=orders-api --set orders-api.image.tag=latest --set orders-api.image.pullPolicy=IfNotPresent \
+  --set payments-api.image.repository=payments-api --set payments-api.image.tag=latest --set payments-api.image.pullPolicy=IfNotPresent \
+  --set notifications-api.image.repository=notifications-api --set notifications-api.image.tag=latest --set notifications-api.image.pullPolicy=IfNotPresent \
+  --set platform-api.image.repository=platform-api --set platform-api.image.tag=latest --set platform-api.image.pullPolicy=IfNotPresent \
+  --set frontend.image.repository=frontend --set frontend.image.tag=latest --set frontend.image.pullPolicy=IfNotPresent
 
 kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
 ```
 
 **Watch out for tag corruption in the loop.** Running the `for`/`case` construct above has, at least once, produced a mis-expanded tag — `orders-api:latest` silently becoming `orders-apiatest:latest`, a real image under a wrong name, not just a display glitch (caught via `docker images --format "{{.Repository}}:{{.Tag}}"`, since the corrupted tag's ID matched the build log's manifest hash exactly). The cause wasn't pinned down; building each service as its own standalone command (not inside the loop) reliably avoided it. If in doubt, verify tags with `docker images --format "{{.Repository}}:{{.Tag}}"` before `kind load`, and `docker rmi` anything mis-tagged.
 
-**`rollout restart` is only enough for a pure code change.** If the change also touched anything under `*/k8s/templates/` (a new `securityContext` block, a new ConfigMap key, an env var) `rollout restart` won't pick it up — that only forces a new pod on the *existing* Deployment spec, and the Deployment spec itself is what needs to change. Use `helm upgrade` instead, from `orchestration`:
+**A values override is only enough for a pure code change.** If the change also touched anything under `*/k8s/templates/` (a new `securityContext` block, a new ConfigMap key, an env var), the `helm upgrade` above still re-renders every chart from its current templates (so template edits do reach the cluster) — but double-check the rendered output with `helm template` first if you're unsure the override and the template change interact the way you expect, since both are landing in the same `helm upgrade`.
 
-```bash
-cd orchestration
-helm dependency update .
-helm upgrade fiap-games . -n default
-kubectl wait --namespace fiap-games --for=condition=ready pod --all --timeout=180s
-```
-
-This re-renders every chart (so template edits actually reach the cluster) and — because `imagePullPolicy: IfNotPresent` means an unchanged image never gets picked up on its own — a service whose *only* change was its image still needs the loop above run first, `helm upgrade` alone won't rebuild or reload anything. The two are independent: rebuild+reload gets new code into containerd, `helm upgrade`/`rollout restart` gets a new pod to actually run it.
+**Reverting to GHCR.** Once you push the commit, drop every `--set` override (or run `helm upgrade fiap-games . --reset-values -n fiap-games`) — the chart's own defaults take back over and every service goes back to pulling `ghcr.io/tc2-fiap/<name>:latest`.
 
 ## Verifying a rebuild actually reached the running system
 
@@ -88,7 +92,7 @@ ls dist/assets/
 # index-5Do0QEo6.js
 # index-DZwwwKOy.css
 
-# After kind load + rollout restart, from anywhere:
+# After kind load and the matching helm upgrade override (see above), from anywhere:
 curl -s http://localhost/ | grep -oE '/assets/index-[^"]+\.(js|css)'
 # /assets/index-5Do0QEo6.js
 # /assets/index-DZwwwKOy.css
