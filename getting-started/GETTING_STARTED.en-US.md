@@ -39,7 +39,7 @@ Every command from here on runs from this parent directory (the one now containi
 kind create cluster --config orchestration/kind/cluster-config.yaml
 ```
 
-This creates a one-node cluster named `fiap-games` with host ports 80/443 mapped in and the `ingress-ready` node label set, so an ingress controller can bind those ports directly — no `kubectl port-forward` needed for anything reached through the Ingress. It also disables `kind`'s default CNI (`cluster-config.yaml`'s `networking.disableDefaultCNI`) — the cluster has no pod networking at all yet, and the node reports `NotReady`, until the next step installs one that actually enforces the `NetworkPolicy` resources this system ships (`kind`'s default CNI doesn't enforce them at all).
+This creates a one-node cluster named `fiap-games` with host ports 80/443 mapped in and the `ingress-ready` node label set, so an ingress controller can bind those ports directly — no `kubectl port-forward` needed for anything reached through the Ingress. It also disables `kind`'s default CNI (`cluster-config.yaml`'s `networking.disableDefaultCNI`) — the cluster has no pod networking at all yet, and the node reports `NotReady`, until the next step installs one that actually enforces the `NetworkPolicy` resources this system ships (`kind`'s default CNI doesn't enforce them at all). If you're not sure what a CNI even is or why that matters, see [`discovers/DISCOVERIES.en-US.md`](../discovers/DISCOVERIES.en-US.md) entry 16 — explained from scratch there, not repeated here.
 
 Install Calico — the node stays `NotReady` and nothing else can schedule until this is done:
 

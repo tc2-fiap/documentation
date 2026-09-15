@@ -39,7 +39,7 @@ Todo comando a partir daqui roda a partir desse diretório pai (o que agora cont
 kind create cluster --config orchestration/kind/cluster-config.yaml
 ```
 
-Isso cria um cluster de um nó chamado `fiap-games`, com as portas 80/443 do host mapeadas e o label de nó `ingress-ready` definido, para que um controlador de ingress possa se ligar diretamente a essas portas — sem necessidade de `kubectl port-forward` para nada acessado pelo Ingress. Também desativa o CNI padrão do `kind` (`networking.disableDefaultCNI` no `cluster-config.yaml`) — o cluster fica sem rede de pods nenhuma por enquanto, e o nó aparece como `NotReady`, até o próximo passo instalar um CNI que realmente aplique os recursos `NetworkPolicy` que este sistema já traz (o CNI padrão do `kind` simplesmente os ignora).
+Isso cria um cluster de um nó chamado `fiap-games`, com as portas 80/443 do host mapeadas e o label de nó `ingress-ready` definido, para que um controlador de ingress possa se ligar diretamente a essas portas — sem necessidade de `kubectl port-forward` para nada acessado pelo Ingress. Também desativa o CNI padrão do `kind` (`networking.disableDefaultCNI` no `cluster-config.yaml`) — o cluster fica sem rede de pods nenhuma por enquanto, e o nó aparece como `NotReady`, até o próximo passo instalar um CNI que realmente aplique os recursos `NetworkPolicy` que este sistema já traz (o CNI padrão do `kind` simplesmente os ignora). Se você não sabe bem o que é um CNI ou por que isso importa, veja a entrada 16 de [`discovers/DISCOVERIES.pt-BR.md`](../discovers/DISCOVERIES.pt-BR.md) — explicado do zero lá, sem repetir aqui.
 
 Instale o Calico — o nó continua `NotReady` e nada mais consegue ser agendado até isso terminar:
 
